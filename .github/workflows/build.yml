@@ -24,23 +24,34 @@ jobs:
       - name: Build firmware
         run: pio run -e ratputer_915
 
-      - name: Create merged firmware binary
+      - name: Package firmware ZIP
         run: |
-          python3 -m esptool --chip esp32s3 merge_bin \
-            --flash_mode dio \
-            --flash_size 8MB \
-            --flash_freq 80m \
-            -o ratcom-firmware.bin \
-            0x0000 .pio/build/ratputer_915/bootloader.bin \
-            0x8000 .pio/build/ratputer_915/partitions.bin \
-            0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
-            0x10000 .pio/build/ratputer_915/firmware.bin
+          mkdir -p ratcom-firmware
+          cp .pio/build/ratputer_915/bootloader.bin ratcom-firmware/
+          cp .pio/build/ratputer_915/partitions.bin ratcom-firmware/
+          cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin ratcom-firmware/
+          cp .pio/build/ratputer_915/firmware.bin ratcom-firmware/
+          cat > ratcom-firmware/manifest.json << 'MANIFEST'
+          {
+            "chipFamily": "ESP32-S3",
+            "flashSize": "8MB",
+            "flashMode": "dio",
+            "flashFreq": "80m",
+            "parts": [
+              { "path": "bootloader.bin", "offset": "0x0000" },
+              { "path": "partitions.bin", "offset": "0x8000" },
+              { "path": "boot_app0.bin", "offset": "0xe000" },
+              { "path": "firmware.bin", "offset": "0x10000" }
+            ]
+          }
+          MANIFEST
+          cd ratcom-firmware && zip -r ../ratcom-firmware.zip . && cd ..
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: ratcom-firmware
-          path: ratcom-firmware.bin
+          path: ratcom-firmware.zip
 
   release:
     needs: build
@@ -62,20 +73,31 @@ jobs:
       - name: Build firmware
         run: pio run -e ratputer_915
 
-      - name: Create merged firmware binary
+      - name: Package firmware ZIP
         run: |
-          python3 -m esptool --chip esp32s3 merge_bin \
-            --flash_mode dio \
-            --flash_size 8MB \
-            --flash_freq 80m \
-            -o ratcom-firmware.bin \
-            0x0000 .pio/build/ratputer_915/bootloader.bin \
-            0x8000 .pio/build/ratputer_915/partitions.bin \
-            0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
-            0x10000 .pio/build/ratputer_915/firmware.bin
+          mkdir -p ratcom-firmware
+          cp .pio/build/ratputer_915/bootloader.bin ratcom-firmware/
+          cp .pio/build/ratputer_915/partitions.bin ratcom-firmware/
+          cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin ratcom-firmware/
+          cp .pio/build/ratputer_915/firmware.bin ratcom-firmware/
+          cat > ratcom-firmware/manifest.json << 'MANIFEST'
+          {
+            "chipFamily": "ESP32-S3",
+            "flashSize": "8MB",
+            "flashMode": "dio",
+            "flashFreq": "80m",
+            "parts": [
+              { "path": "bootloader.bin", "offset": "0x0000" },
+              { "path": "partitions.bin", "offset": "0x8000" },
+              { "path": "boot_app0.bin", "offset": "0xe000" },
+              { "path": "firmware.bin", "offset": "0x10000" }
+            ]
+          }
+          MANIFEST
+          cd ratcom-firmware && zip -r ../ratcom-firmware.zip . && cd ..
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ratcom-firmware.bin
+          files: ratcom-firmware.zip
           generate_release_notes: true
