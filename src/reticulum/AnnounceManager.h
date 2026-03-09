@@ -60,6 +60,9 @@ public:
     // Evict old entries
     void evictStale(unsigned long maxAgeMs = 3600000);  // 1 hour default
 
+    // Clear all nodes and state (used during first-boot data wipe)
+    void clearAll();
+
 private:
     void saveContact(const DiscoveredNode& node);
     void removeContact(const std::string& hexHash);

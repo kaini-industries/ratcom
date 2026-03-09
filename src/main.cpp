@@ -30,6 +30,7 @@
 #include "ui/screens/MessageView.h"
 #include "ui/screens/SettingsScreen.h"
 #include "ui/screens/NameInputScreen.h"
+#include "ui/screens/DataCleanScreen.h"
 #include "ui/screens/HelpOverlay.h"
 #include "power/PowerManager.h"
 #include "audio/AudioNotify.h"
@@ -73,6 +74,7 @@ NodesScreen nodesScreen;
 MessagesScreen messagesScreen;
 MessageView messageView;
 NameInputScreen nameInputScreen;
+DataCleanScreen dataCleanScreen;
 SettingsScreen settingsScreen;
 HelpOverlay helpOverlay;
 
@@ -571,6 +573,29 @@ void setup() {
     tabScreens[TabBar::TAB_NODES] = &nodesScreen;
     tabScreens[TabBar::TAB_SETUP] = &settingsScreen;
 
+    // Data clean screen (first boot only — when SD has old data)
+    dataCleanScreen.setDoneCallback([](bool wipe) {
+        if (wipe) {
+            Serial.println("[BOOT] User chose to wipe old data");
+            dataCleanScreen.setStatus("Clearing old data...");
+            ui.markAllDirty();
+            ui.render();
+            ui.flush();
+            sdStore.wipeRatcom();
+            if (announceManager) announceManager->clearAll();
+            Serial.println("[BOOT] Old data cleared");
+            dataCleanScreen.setStatus("Done! Rebooting...");
+            ui.markAllDirty();
+            ui.render();
+            ui.flush();
+            delay(1500);
+            ESP.restart();
+        } else {
+            Serial.println("[BOOT] User chose to keep old data");
+            ui.setScreen(&nameInputScreen);
+        }
+    });
+
     // Name input flow or straight to home
     if (userConfig.settings().displayName.isEmpty()) {
         // Show name input screen (boot mode stays on for clean branded look)
@@ -590,7 +615,14 @@ void setup() {
             lastAutoAnnounce = millis();
             Serial.println("[BOOT] Initial announce sent");
         });
-        ui.setScreen(&nameInputScreen);
+        // Check if SD has old data that should be cleaned
+        if (sdStore.isReady() && sdStore.hasExistingData()) {
+            ui.setScreen(&dataCleanScreen);
+            Serial.println("[BOOT] Old SD data found, showing data clean screen");
+        } else {
+            ui.setScreen(&nameInputScreen);
+            Serial.println("[BOOT] Showing name input screen");
+        }
     } else {
         ui.setBootMode(false);
         ui.setScreen(&homeScreen);

@@ -188,6 +188,21 @@ void SDStore::wipeDir(const char* path) {
     dir.close();
 }
 
+bool SDStore::hasExistingData() {
+    if (!_ready) return false;
+    if (SD.exists(SD_PATH_USER_CONFIG)) return true;
+    if (SD.exists(SD_PATH_IDENTITY)) return true;
+    File dir = SD.open(SD_PATH_MESSAGES);
+    if (dir && dir.isDirectory()) {
+        File entry = dir.openNextFile();
+        bool found = (bool)entry;
+        if (entry) entry.close();
+        dir.close();
+        if (found) return true;
+    }
+    return false;
+}
+
 bool SDStore::formatForRatcom() {
     if (!_ready) return false;
 

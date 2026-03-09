@@ -187,18 +187,22 @@ void AnnounceManager::received_announce(
     // Add new node
     if ((int)_nodes.size() >= MAX_NODES) {
         evictStale();
-        // If still full, remove oldest unsaved node
+        // If still full, remove highest-hop unsaved node (break ties by oldest)
         if ((int)_nodes.size() >= MAX_NODES) {
+            uint8_t maxHops = 0;
             unsigned long oldest = ULONG_MAX;
-            int oldestIdx = -1;
+            int evictIdx = -1;
             for (int i = 0; i < (int)_nodes.size(); i++) {
-                if (!_nodes[i].saved && _nodes[i].lastSeen < oldest) {
+                if (_nodes[i].saved) continue;
+                if (_nodes[i].hops > maxHops ||
+                    (_nodes[i].hops == maxHops && _nodes[i].lastSeen < oldest)) {
+                    maxHops = _nodes[i].hops;
                     oldest = _nodes[i].lastSeen;
-                    oldestIdx = i;
+                    evictIdx = i;
                 }
             }
-            if (oldestIdx >= 0) {
-                _nodes.erase(_nodes.begin() + oldestIdx);
+            if (evictIdx >= 0) {
+                _nodes.erase(_nodes.begin() + evictIdx);
             }
             // If all nodes are saved, can't evict — skip adding new node
         }
@@ -299,6 +303,12 @@ void AnnounceManager::evictStale(unsigned long maxAgeMs) {
                 return !n.saved && (now - n.lastSeen > maxAgeMs);
             }),
         _nodes.end());
+}
+
+void AnnounceManager::clearAll() {
+    _nodes.clear();
+    _contactsDirty = false;
+    Serial.println("[ANNOUNCE] Cleared all nodes");
 }
 
 void AnnounceManager::saveContact(const DiscoveredNode& node) {

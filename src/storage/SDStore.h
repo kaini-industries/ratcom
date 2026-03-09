@@ -34,6 +34,9 @@ public:
     // Recursively delete /ratcom/* and recreate clean dirs
     bool wipeRatcom();
 
+    // Check if SD has data from a previous install
+    bool hasExistingData();
+
 private:
     void wipeDir(const char* path);
     bool _ready = false;
