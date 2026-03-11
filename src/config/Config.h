@@ -44,7 +44,7 @@
 #define TCP_CONNECT_TIMEOUT_MS      5000
 
 // --- Announce Flood Defense ---
-#define RATCOM_MAX_ANNOUNCES_PER_SEC 2     // Transport-level rate limit (before Ed25519 verify)
+#define RATCOM_MAX_ANNOUNCES_PER_SEC 6     // Transport-level rate limit (before Ed25519 verify)
 
 // --- Limits ---
 #define RATPUTER_MAX_NODES           50

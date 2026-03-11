@@ -29,6 +29,7 @@ struct LXMFMessage {
     bool incoming = false;
     bool read = false;          // Persistence: false = unread
     int retries = 0;
+    unsigned long lastRetryMs = 0;
     RNS::Bytes messageId;      // SHA-256 hash of full payload
     uint32_t receiveCounter = 0; // Monotonic receive order counter
 

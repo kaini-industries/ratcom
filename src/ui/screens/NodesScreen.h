@@ -48,4 +48,7 @@ private:
 
     // Contacts view toggle
     bool _contactsView = false;
+
+    // Delta gating for refresh
+    int _lastKnownCount = 0;
 };

@@ -21,22 +21,27 @@ bool LXMFManager::begin(ReticulumManager* rns, MessageStore* store) {
 
 void LXMFManager::loop() {
     if (_outQueue.empty()) return;
-    LXMFMessage& msg = _outQueue.front();
-
-    // Throttle retries — wait 2 seconds between attempts
     unsigned long now = millis();
-    if (msg.retries > 0 && (now - _lastRetryMs) < 2000) return;
-    _lastRetryMs = now;
 
-    if (sendDirect(msg)) {
-        Serial.printf("[LXMF] Queue drain: status=%s dest=%s\n",
-                      msg.statusStr(), msg.destHash.toHex().substr(0, 8).c_str());
-        // Fire status callback for UI update (no second disk save — status is ephemeral)
-        if (_statusCb) {
-            std::string peerHex = msg.destHash.toHex();
-            _statusCb(peerHex, msg.timestamp, msg.status);
+    for (auto it = _outQueue.begin(); it != _outQueue.end(); ++it) {
+        LXMFMessage& msg = *it;
+
+        // Per-message retry cooldown: 2 seconds between attempts
+        if (msg.retries > 0 && (now - msg.lastRetryMs) < 2000) continue;
+
+        msg.lastRetryMs = now;
+
+        if (sendDirect(msg)) {
+            Serial.printf("[LXMF] Queue drain: status=%s dest=%s\n",
+                          msg.statusStr(), msg.destHash.toHex().substr(0, 8).c_str());
+            if (_statusCb) {
+                std::string peerHex = msg.destHash.toHex();
+                _statusCb(peerHex, msg.timestamp, msg.status);
+            }
+            _outQueue.erase(it);
+            return;  // One send per loop() call to avoid hogging CPU
         }
-        _outQueue.pop_front();
+        // sendDirect returned false — message stays in queue, try next
     }
 }
 
@@ -63,8 +68,15 @@ bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& con
 
     _outQueue.push_back(msg);
 
-    Serial.printf("[LXMF] Message queued for %s (%d bytes)\n",
-                  destHash.toHex().substr(0, 8).c_str(), (int)content.size());
+    // Proactively request path so it's ready when sendDirect runs
+    if (!RNS::Transport::has_path(destHash)) {
+        RNS::Transport::request_path(destHash);
+        Serial.printf("[LXMF] Message queued for %s (%d bytes) — requesting path\n",
+                      destHash.toHex().substr(0, 8).c_str(), (int)content.size());
+    } else {
+        Serial.printf("[LXMF] Message queued for %s (%d bytes) — path known\n",
+                      destHash.toHex().substr(0, 8).c_str(), (int)content.size());
+    }
     return true;
 }
 
@@ -91,6 +103,28 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
 
     Serial.printf("[LXMF] recall OK: identity for %s\n",
                   msg.destHash.toHex().substr(0, 8).c_str());
+
+    // Ensure path exists — without a path, Transport::outbound() broadcasts as
+    // Header1 which the Python hub silently drops
+    if (!RNS::Transport::has_path(msg.destHash)) {
+        msg.retries++;
+        if (msg.retries == 1 || msg.retries % 5 == 0) {
+            Serial.printf("[LXMF] No path for %s, requesting (retry %d)\n",
+                          msg.destHash.toHex().substr(0, 8).c_str(), msg.retries);
+            RNS::Transport::request_path(msg.destHash);
+        }
+        if (msg.retries >= 30) {
+            Serial.printf("[LXMF] No path for %s after %d retries — FAILED\n",
+                          msg.destHash.toHex().substr(0, 8).c_str(), msg.retries);
+            msg.status = LXMFStatus::FAILED;
+            return true;
+        }
+        return false;  // keep in queue, retry later
+    }
+
+    Serial.printf("[LXMF] path OK: %s hops=%d\n",
+                  msg.destHash.toHex().substr(0, 8).c_str(),
+                  RNS::Transport::hops_to(msg.destHash));
 
     RNS::Destination outDest(
         recipientId,

@@ -66,7 +66,5 @@ private:
     std::set<std::string> _seenMessageIds;
     static constexpr int MAX_SEEN_IDS = 100;
 
-    unsigned long _lastRetryMs = 0;
-
     static LXMFManager* _instance;
 };

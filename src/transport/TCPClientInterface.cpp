@@ -33,10 +33,11 @@ void TCPClientInterface::tryConnect() {
     Serial.printf("[TCP] Connecting to %s:%d...\n", _host.c_str(), _port);
 
     if (_client.connect(_host.c_str(), _port, TCP_CONNECT_TIMEOUT_MS)) {
-        // Reset HDLC frame state for new connection
+        // Reset HDLC frame state and hub discovery for new connection
         _inFrame = false;
         _escaped = false;
         _rxPos = 0;
+        _hubTransportIdKnown = false;
         _lastRxTime = millis();
 
         // Set TCP write timeout to prevent blocking on half-open sockets
@@ -71,13 +72,29 @@ void TCPClientInterface::loop() {
         return;
     }
 
-    // Drain multiple incoming frames per loop (up to 3, time-boxed)
+    // Drain multiple incoming frames per loop (up to 5, time-boxed)
     unsigned long tcpStart = millis();
-    for (int i = 0; i < 3 && _client.available() && (millis() - tcpStart < TCP_LOOP_BUDGET_MS); i++) {
+    for (int i = 0; i < 5 && _client.available() && (millis() - tcpStart < TCP_LOOP_BUDGET_MS); i++) {
         unsigned long rxStart = millis();
         int len = readFrame();
         if (len > 0) {
             _lastRxTime = millis();
+
+            // Learn hub transport_id from incoming Header2 packets
+            if (len >= 35) {
+                uint8_t flags = _rxBuffer[0];
+                uint8_t header_type = (flags >> 6) & 0x01;
+                if (header_type == 1) {  // Header2
+                    if (!_hubTransportIdKnown) {
+                        char hex[33];
+                        for (int j = 0; j < 16; j++) sprintf(hex + j*2, "%02x", _rxBuffer[j+2]);
+                        Serial.printf("[TCP] Learned hub transport_id: %.8s\n", hex);
+                    }
+                    memcpy(_hubTransportId, _rxBuffer + 2, 16);
+                    _hubTransportIdKnown = true;
+                }
+            }
+
             RNS::Bytes data(_rxBuffer, len);
             Serial.printf("[TCP] RX %d bytes from %s:%d (%lums)\n",
                           len, _host.c_str(), _port, millis() - rxStart);
@@ -91,23 +108,74 @@ void TCPClientInterface::loop() {
 void TCPClientInterface::send_outgoing(const RNS::Bytes& data) {
     if (!_online || !_client.connected()) return;
 
+    // Wrap Header1 non-announce packets as Header2 for TCP transport
+    // (mirrors Rust actor.rs:653-678 — hub drops raw Header1 data packets)
+    if (_hubTransportIdKnown && data.size() >= 19) {
+        uint8_t flags = data.data()[0];
+        uint8_t header_type = (flags >> 6) & 0x01;
+        uint8_t packet_type = flags & 0x03;
+
+        if (packet_type != 0x01) {  // Not ANNOUNCE
+            if (header_type == 0) {
+                // Header1 → wrap as Header2 (handles hops==1, hops==0, unknown path)
+                uint8_t new_flags = flags | 0x50;  // Set Header2 (bit 6) + Transport (bit 4)
+
+                // Build Header2 packet: flags(1) + hops(1) + transport_id(16) + original[2:]
+                size_t new_len = data.size() + 16;
+                uint8_t wrapped[1024];
+                wrapped[0] = new_flags;
+                wrapped[1] = data.data()[1];  // hops
+                memcpy(wrapped + 2, _hubTransportId, 16);  // transport_id
+                memcpy(wrapped + 18, data.data() + 2, data.size() - 2);  // dest_hash + context + payload
+
+                Serial.printf("[TCP] TX %d->%d bytes (H1->H2 wrap) to %s:%d\n",
+                              (int)data.size(), (int)new_len, _host.c_str(), _port);
+                sendFrame(wrapped, new_len);
+                InterfaceImpl::handle_outgoing(data);  // Stats use original size
+                return;
+            }
+            else if (data.size() >= 35 && memcmp(data.data() + 2, _hubTransportId, 16) != 0) {
+                // Header2 with wrong transport_id → fix it
+                // Transport::outbound() may have used _received_from=destination_hash
+                uint8_t fixed[1024];
+                memcpy(fixed, data.data(), data.size());
+                memcpy(fixed + 2, _hubTransportId, 16);
+
+                Serial.printf("[TCP] TX %d bytes (H2 transport_id fixed) to %s:%d\n",
+                              (int)data.size(), _host.c_str(), _port);
+                sendFrame(fixed, data.size());
+                InterfaceImpl::handle_outgoing(data);
+                return;
+            }
+        }
+    }
+
+    // Passthrough: announces, correct Header2, pre-hub-discovery
     sendFrame(data.data(), data.size());
-    Serial.printf("[TCP] TX %d bytes to %s:%d\n", (int)data.size(), _host.c_str(), _port);
+    if (!_hubTransportIdKnown) {
+        Serial.printf("[TCP] TX %d bytes (no hub ID yet) to %s:%d\n", (int)data.size(), _host.c_str(), _port);
+    } else {
+        Serial.printf("[TCP] TX %d bytes (passthrough) to %s:%d\n", (int)data.size(), _host.c_str(), _port);
+    }
     InterfaceImpl::handle_outgoing(data);
 }
 
 // HDLC-like framing: [0x7E] [escaped data] [0x7E]
+// Buffered write — single syscall instead of per-byte writes
 void TCPClientInterface::sendFrame(const uint8_t* data, size_t len) {
-    _client.write(FRAME_START);
-    for (size_t i = 0; i < len; i++) {
+    uint8_t buf[1024];  // Max frame size (matches _rxBuffer)
+    size_t pos = 0;
+    buf[pos++] = FRAME_START;
+    for (size_t i = 0; i < len && pos < sizeof(buf) - 2; i++) {
         if (data[i] == FRAME_START || data[i] == FRAME_ESC) {
-            _client.write(FRAME_ESC);
-            _client.write(data[i] ^ FRAME_XOR);
+            buf[pos++] = FRAME_ESC;
+            buf[pos++] = data[i] ^ FRAME_XOR;
         } else {
-            _client.write(data[i]);
+            buf[pos++] = data[i];
         }
     }
-    _client.write(FRAME_START);
+    buf[pos++] = FRAME_START;
+    _client.write(buf, pos);
     _client.flush();
 }
 

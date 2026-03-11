@@ -52,6 +52,7 @@ public:
     void disableCrc();
 
     // --- Status ---
+    float getAirtime(uint16_t written);
     int  currentRssi();
     int  packetRssi();
     float packetSnr();
@@ -100,8 +101,6 @@ private:
     void explicitHeaderMode();
     void implicitHeaderMode();
     void handleLowDataRate();
-
-    float getAirtime(uint16_t written);
 
     // --- ISR ---
     void handleDio0Rise();

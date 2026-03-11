@@ -23,21 +23,26 @@ void NodesScreen::refreshList() {
     _list.clear();
     _nodeHashes.clear();
 
-    // Copy and sort nodes alphabetically by name (case-insensitive)
-    auto nodes = _announces->nodes();  // copy
-    std::sort(nodes.begin(), nodes.end(), [](const DiscoveredNode& a, const DiscoveredNode& b) {
-        std::string na = a.name, nb = b.name;
-        std::transform(na.begin(), na.end(), na.begin(), ::tolower);
-        std::transform(nb.begin(), nb.end(), nb.begin(), ::tolower);
-        return na < nb;
+    // Sort by pre-computed lowercase keys — avoids copying the entire vector
+    const auto& nodes = _announces->nodes();
+    struct SortEntry { int idx; std::string lower; };
+    std::vector<SortEntry> sorted;
+    sorted.reserve(nodes.size());
+    for (int i = 0; i < (int)nodes.size(); i++) {
+        if (_contactsView && !nodes[i].saved) continue;
+        std::string l = nodes[i].name;
+        std::transform(l.begin(), l.end(), l.begin(), ::tolower);
+        sorted.push_back({i, std::move(l)});
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const SortEntry& a, const SortEntry& b) {
+        return a.lower < b.lower;
     });
 
-    int newSelectedIdx = 0;
-    for (size_t i = 0; i < nodes.size(); i++) {
-        const auto& node = nodes[i];
+    _lastKnownCount = (int)nodes.size();
 
-        // In contacts view, only show saved nodes
-        if (_contactsView && !node.saved) continue;
+    int newSelectedIdx = 0;
+    for (size_t si = 0; si < sorted.size(); si++) {
+        const auto& node = nodes[sorted[si].idx];
 
         char line[64];
         std::string displayName = node.name.substr(0, 18);
@@ -130,9 +135,10 @@ void NodesScreen::exitActionMenu() {
 }
 
 void NodesScreen::render(M5Canvas& canvas) {
-    // Auto-refresh every 20 seconds (skip while action menu open)
-    if (!_showingActions && millis() - _lastRefresh > 20000) {
-        refreshList();
+    // Auto-refresh every 30 seconds if node count changed (skip while action menu open)
+    if (!_showingActions && millis() - _lastRefresh > 30000) {
+        int delta = abs(_announces->nodeCount() - _lastKnownCount);
+        if (delta > 0) refreshList();
     }
 
     int y = Theme::CONTENT_Y;

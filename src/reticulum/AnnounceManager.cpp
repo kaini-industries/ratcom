@@ -122,6 +122,8 @@ static std::string sanitizeName(const std::string& raw, size_t maxLen = 16) {
 AnnounceManager::AnnounceManager(const char* aspectFilter)
     : RNS::AnnounceHandler(aspectFilter)
 {
+    _nodes.reserve(MAX_NODES);
+    _hashIndex.reserve(MAX_NODES);
 }
 
 void AnnounceManager::setStorage(SDStore* sd, FlashStore* flash) {
@@ -171,33 +173,42 @@ void AnnounceManager::received_announce(
         if (++_globalAnnounceCount > MAX_GLOBAL_ANNOUNCES_PER_SEC) return;
     }
 
-    std::string destHex = destination_hash.toHex();
-    Serial.printf("[ANNOUNCE] From: %s name=\"%s\"\n", destHex.c_str(), name.c_str());
-
-    // Update name cache for persistence across reboots
-    if (!name.empty()) {
-        auto it = _nameCache.find(destHex);
-        if (it == _nameCache.end() || it->second != name) {
-            _nameCache[destHex] = name;
-            _nameCacheDirty = true;
-        }
-    }
-
-    // Null identity guard — Identity::recall() can fail after cull
+    std::string key = makeKey(destination_hash);
     std::string idHex = announced_identity ? announced_identity.hexhash() : "";
 
     unsigned long now = millis();
-    // Check if already known
-    for (auto& node : _nodes) {
-        if (node.hash == destination_hash) {
-            // Rate-limit updates for existing nodes
-            if (now - node.lastSeen < ANNOUNCE_MIN_INTERVAL_MS) return;
-            if (!name.empty()) node.name = name;
-            if (!idHex.empty()) node.identityHex = idHex;
-            node.lastSeen = now;
-            node.hops = RNS::Transport::hops_to(destination_hash);
-            if (node.saved) _contactsDirty = true;
-            return;
+    // O(1) lookup for existing node
+    auto it = _hashIndex.find(key);
+    if (it != _hashIndex.end()) {
+        auto& node = _nodes[it->second];
+        if (now - node.lastSeen < ANNOUNCE_MIN_INTERVAL_MS) return;
+        if (!name.empty()) node.name = name;
+        if (!idHex.empty()) node.identityHex = idHex;
+        node.lastSeen = now;
+        node.hops = RNS::Transport::hops_to(destination_hash);
+        if (node.saved) _contactsDirty = true;
+        // Only compute toHex for log + name cache when node actually updated
+        std::string destHex = destination_hash.toHex();
+        Serial.printf("[ANNOUNCE] Update: %s name=\"%s\"\n", destHex.c_str(), name.c_str());
+        if (!name.empty()) {
+            auto nc = _nameCache.find(destHex);
+            if (nc == _nameCache.end() || nc->second != name) {
+                _nameCache[destHex] = name;
+                _nameCacheDirty = true;
+            }
+        }
+        return;
+    }
+
+    // New node — toHex needed for log + name cache
+    std::string destHex = destination_hash.toHex();
+    Serial.printf("[ANNOUNCE] New: %s name=\"%s\"\n", destHex.c_str(), name.c_str());
+
+    if (!name.empty()) {
+        auto nc = _nameCache.find(destHex);
+        if (nc == _nameCache.end() || nc->second != name) {
+            _nameCache[destHex] = name;
+            _nameCacheDirty = true;
         }
     }
 
@@ -217,32 +228,45 @@ void AnnounceManager::received_announce(
                     evictIdx = i;
                 }
             }
-            if (evictIdx >= 0) _nodes.erase(_nodes.begin() + evictIdx);
+            if (evictIdx >= 0) {
+                // Swap-and-pop for O(1) eviction
+                int lastIdx = (int)_nodes.size() - 1;
+                if (evictIdx != lastIdx) {
+                    std::string swapKey = makeKey(_nodes[lastIdx].hash);
+                    _hashIndex[swapKey] = evictIdx;
+                    std::swap(_nodes[evictIdx], _nodes[lastIdx]);
+                }
+                _hashIndex.erase(makeKey(_nodes[lastIdx].hash));
+                _nodes.pop_back();
+            }
         }
     }
     if ((int)_nodes.size() >= MAX_NODES) return;
 
     DiscoveredNode node;
     node.hash = destination_hash;
-    node.name = name.empty() ? destination_hash.toHex().substr(0, 12) : name;
+    node.name = name.empty() ? destHex.substr(0, 12) : name;
     node.identityHex = idHex;
     node.lastSeen = millis();
     node.hops = RNS::Transport::hops_to(destination_hash);
+    _hashIndex[key] = (int)_nodes.size();
     _nodes.push_back(node);
 }
 
 const DiscoveredNode* AnnounceManager::findNode(const RNS::Bytes& hash) const {
-    for (const auto& node : _nodes) {
-        if (node.hash == hash) return &node;
-    }
+    auto it = _hashIndex.find(makeKey(hash));
+    if (it != _hashIndex.end()) return &_nodes[it->second];
     return nullptr;
 }
 
 const DiscoveredNode* AnnounceManager::findNodeByHex(const std::string& hexHash) const {
+    RNS::Bytes target;
+    target.assignHex(hexHash.c_str());
+    auto it = _hashIndex.find(makeKey(target));
+    if (it != _hashIndex.end()) return &_nodes[it->second];
+    // Prefix match fallback (for truncated 16-char conversation hashes)
     for (const auto& n : _nodes) {
         std::string nodeHex = n.hash.toHex();
-        if (nodeHex == hexHash) return &n;
-        // Support prefix matching for truncated conversation hashes (16-char dirs)
         if (hexHash.length() < nodeHex.length() &&
             nodeHex.substr(0, hexHash.length()) == hexHash) return &n;
     }
@@ -254,15 +278,16 @@ void AnnounceManager::addManualContact(const std::string& hexHash, const std::st
     hash.assignHex(hexHash.c_str());
 
     std::string safeName = sanitizeName(name);
+    std::string key = makeKey(hash);
 
-    // Check duplicate
-    for (auto& node : _nodes) {
-        if (node.hash == hash) {
-            if (!safeName.empty()) node.name = safeName;
-            node.saved = true;
-            saveContact(node);
-            return;
-        }
+    // Check duplicate via index
+    auto it = _hashIndex.find(key);
+    if (it != _hashIndex.end()) {
+        auto& node = _nodes[it->second];
+        if (!safeName.empty()) node.name = safeName;
+        node.saved = true;
+        saveContact(node);
+        return;
     }
 
     DiscoveredNode node;
@@ -270,6 +295,7 @@ void AnnounceManager::addManualContact(const std::string& hexHash, const std::st
     node.name = safeName.empty() ? hexHash.substr(0, 12) : safeName;
     node.lastSeen = millis();
     node.saved = true;
+    _hashIndex[key] = (int)_nodes.size();
     _nodes.push_back(node);
     saveContact(node);
 }
@@ -277,26 +303,23 @@ void AnnounceManager::addManualContact(const std::string& hexHash, const std::st
 void AnnounceManager::saveNode(const std::string& hexHash) {
     RNS::Bytes hash;
     hash.assignHex(hexHash.c_str());
-    for (auto& node : _nodes) {
-        if (node.hash == hash) {
-            node.saved = true;
-            saveContact(node);
-            Serial.printf("[ANNOUNCE] Saved contact: %s\n", node.name.c_str());
-            return;
-        }
+    auto it = _hashIndex.find(makeKey(hash));
+    if (it != _hashIndex.end()) {
+        auto& node = _nodes[it->second];
+        node.saved = true;
+        saveContact(node);
+        Serial.printf("[ANNOUNCE] Saved contact: %s\n", node.name.c_str());
     }
 }
 
 void AnnounceManager::unsaveNode(const std::string& hexHash) {
     RNS::Bytes hash;
     hash.assignHex(hexHash.c_str());
-    for (auto& node : _nodes) {
-        if (node.hash == hash) {
-            node.saved = false;
-            removeContact(hexHash);
-            Serial.printf("[ANNOUNCE] Removed contact: %s\n", node.name.c_str());
-            return;
-        }
+    auto it = _hashIndex.find(makeKey(hash));
+    if (it != _hashIndex.end()) {
+        _nodes[it->second].saved = false;
+        removeContact(hexHash);
+        Serial.printf("[ANNOUNCE] Removed contact: %s\n", _nodes[it->second].name.c_str());
     }
 }
 
@@ -308,14 +331,23 @@ void AnnounceManager::evictStale(unsigned long maxAgeMs) {
                 return !n.saved && (now - n.lastSeen > maxAgeMs);
             }),
         _nodes.end());
+    rebuildIndex();
 }
 
 void AnnounceManager::clearAll() {
     _nodes.clear();
+    _hashIndex.clear();
     _nameCache.clear();
     _contactsDirty = false;
     _nameCacheDirty = false;
     Serial.println("[ANNOUNCE] Cleared all nodes and name cache");
+}
+
+void AnnounceManager::rebuildIndex() {
+    _hashIndex.clear();
+    for (int i = 0; i < (int)_nodes.size(); i++) {
+        _hashIndex[makeKey(_nodes[i].hash)] = i;
+    }
 }
 
 void AnnounceManager::saveContact(const DiscoveredNode& node) {
@@ -413,11 +445,8 @@ void AnnounceManager::loadContacts() {
                             // Check if already loaded (avoid duplicates)
                             RNS::Bytes hash;
                             hash.assignHex(hexHash.c_str());
-                            bool dup = false;
-                            for (auto& n : _nodes) {
-                                if (n.hash == hash) { dup = true; break; }
-                            }
-                            if (!dup) {
+                            std::string key = makeKey(hash);
+                            if (_hashIndex.find(key) == _hashIndex.end()) {
                                 DiscoveredNode node;
                                 node.hash = hash;
                                 node.name = sanitizeName(doc["name"] | "");
@@ -427,6 +456,7 @@ void AnnounceManager::loadContacts() {
                                 node.hops = doc["hops"] | 0;
                                 node.lastSeen = doc["lastSeen"] | (unsigned long)millis();
                                 node.saved = true;
+                                _hashIndex[key] = (int)_nodes.size();
                                 _nodes.push_back(node);
                                 loaded++;
                                 Serial.printf("[CONTACT] Loaded from %s: %s (%s)\n",

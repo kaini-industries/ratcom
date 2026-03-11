@@ -34,7 +34,11 @@ private:
     uint16_t _port;
     unsigned long _lastAttempt = 0;
     unsigned long _lastRxTime = 0;
-    uint8_t _rxBuffer[600];
+    uint8_t _rxBuffer[1024];
+
+    // Hub transport_id for Header2 wrapping (learned from incoming Header2 packets)
+    uint8_t _hubTransportId[16] = {};
+    bool _hubTransportIdKnown = false;
 
     // Persistent HDLC frame reassembly state (survives across loop() calls)
     bool _inFrame = false;

@@ -19,6 +19,22 @@ void MessageView::refreshMessages() {
     // Load last 20 messages (paginated)
     _messages = _lxmf->getMessages(_peerHex);
 
+    // Merge any pending messages not yet flushed to disk
+    auto pendIt = _pendingMessages.find(_peerHex);
+    if (pendIt != _pendingMessages.end()) {
+        for (const auto& pending : pendIt->second) {
+            bool found = false;
+            for (const auto& loaded : _messages) {
+                if (loaded.timestamp == pending.timestamp &&
+                    loaded.sourceHash == pending.sourceHash) {
+                    found = true; break;
+                }
+            }
+            if (!found) _messages.push_back(pending);
+        }
+        _pendingMessages.erase(pendIt);
+    }
+
     _lxmf->markRead(_peerHex);
     if (_unreadCb) _unreadCb();
 
@@ -181,6 +197,8 @@ void MessageView::notifyNewMessage(const LXMFMessage& msg) {
     }
 
     if (!match) {
+        // Store for later merge when this conversation is opened
+        _pendingMessages[senderHex].push_back(msg);
         _needsRefresh = true;
         return;
     }

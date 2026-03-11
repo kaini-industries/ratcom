@@ -735,9 +735,13 @@ void loop() {
     // 4. Auto-announce (2 minutes)
     if (bootComplete && now - lastAutoAnnounce >= ANNOUNCE_INTERVAL_MS) {
         lastAutoAnnounce = now;
-        rns.announce();
-        ui.statusBar().flashAnnounce();
-        Serial.println("[AUTO] Periodic announce");
+        if (rns.loraInterface() && rns.loraInterface()->airtimeUtilization() > LoRaInterface::AIRTIME_THROTTLE) {
+            Serial.println("[AUTO] Skipping announce: LoRa airtime > 25%");
+        } else {
+            rns.announce();
+            ui.statusBar().flashAnnounce();
+            Serial.println("[AUTO] Periodic announce");
+        }
     }
 
     // 5. WiFi STA non-blocking connection handler

@@ -5,6 +5,7 @@
 #include "reticulum/LXMFManager.h"
 #include <vector>
 #include <string>
+#include <map>
 
 class AnnounceManager;
 
@@ -54,4 +55,7 @@ private:
     BackCallback _backCb;
     UnreadUpdateCb _unreadCb;
     bool _needsRefresh = false;
+
+    // Pending messages not yet flushed to disk — merged on refreshMessages()
+    std::map<std::string, std::vector<LXMFMessage>> _pendingMessages;
 };
