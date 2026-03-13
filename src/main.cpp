@@ -738,8 +738,7 @@ void loop() {
         if (rns.loraInterface() && rns.loraInterface()->airtimeUtilization() > LoRaInterface::AIRTIME_THROTTLE) {
             Serial.println("[AUTO] Skipping announce: LoRa airtime > 25%");
         } else {
-            rns.announce();
-            ui.statusBar().flashAnnounce();
+            announceWithName();
             Serial.println("[AUTO] Periodic announce");
         }
     }

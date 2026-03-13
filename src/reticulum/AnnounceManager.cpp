@@ -71,7 +71,21 @@ static std::string extractMsgPackName(const uint8_t* data, size_t len) {
         arrLen = ((size_t)data[1] << 8) | data[2];
         pos = 3;
     }
-    else return "";  // Not a MsgPack array
+    else {
+        // Not a MsgPack array — try bare str/bin value (Rust sends raw UTF-8,
+        // some implementations might send bare msgpack str or bin)
+        size_t slen = 0;
+        size_t hdr = 0;
+        if ((b & 0xE0) == 0xA0) { slen = b & 0x1F; hdr = 1; }           // fixstr
+        else if (b == 0xD9 && len >= 2) { slen = data[1]; hdr = 2; }     // str8
+        else if (b == 0xDA && len >= 3) { slen = ((size_t)data[1] << 8) | data[2]; hdr = 3; } // str16
+        else if (b == 0xC4 && len >= 2) { slen = data[1]; hdr = 2; }     // bin8
+        else if (b == 0xC5 && len >= 3) { slen = ((size_t)data[1] << 8) | data[2]; hdr = 3; } // bin16
+        if (hdr > 0 && slen > 0 && hdr + slen <= len) {
+            return std::string((const char*)&data[hdr], slen);
+        }
+        return "";  // Not a recognized MsgPack format
+    }
 
     // Pass 1: scan for first non-empty STR element
     size_t savedPos = pos;
@@ -100,17 +114,35 @@ static std::string extractMsgPackName(const uint8_t* data, size_t len) {
     return "";
 }
 
-// Tighter character filter — only safe displayable characters
-static std::string sanitizeName(const std::string& raw, size_t maxLen = 16) {
+// Character filter — safe displayable characters including UTF-8 multibyte
+static std::string sanitizeName(const std::string& raw, size_t maxLen = 32) {
     std::string clean;
     clean.reserve(std::min(raw.size(), maxLen));
-    for (char c : raw) {
-        if (clean.size() >= maxLen) break;
+    const uint8_t* p = (const uint8_t*)raw.data();
+    size_t sz = raw.size();
+    for (size_t i = 0; i < sz && clean.size() < maxLen; ) {
+        uint8_t c = p[i];
+        // ASCII safe chars
         if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
             (c >= '0' && c <= '9') ||
             c == ' ' || c == '-' || c == '_' || c == '.' || c == '\'') {
-            clean += c;
+            clean += (char)c;
+            i++;
         }
+        // UTF-8 multibyte: pass through valid sequences (display names with emoji/accents)
+        else if ((c & 0xE0) == 0xC0 && i + 1 < sz && (p[i+1] & 0xC0) == 0x80) {
+            clean.append((const char*)&p[i], 2); i += 2;
+        }
+        else if ((c & 0xF0) == 0xE0 && i + 2 < sz &&
+                 (p[i+1] & 0xC0) == 0x80 && (p[i+2] & 0xC0) == 0x80) {
+            clean.append((const char*)&p[i], 3); i += 3;
+        }
+        else if ((c & 0xF8) == 0xF0 && i + 3 < sz &&
+                 (p[i+1] & 0xC0) == 0x80 && (p[i+2] & 0xC0) == 0x80 && (p[i+3] & 0xC0) == 0x80) {
+            clean.append((const char*)&p[i], 4); i += 4;
+        }
+        // Strip control chars, invalid bytes
+        else { i++; }
     }
     // Trim leading/trailing spaces
     size_t start = clean.find_first_not_of(' ');
@@ -141,14 +173,27 @@ void AnnounceManager::received_announce(
     if (app_data.size() > 0) {
         std::string rawName = extractMsgPackName(app_data.data(), app_data.size());
         if (rawName.empty()) {
-            // Only use raw bytes as name if ALL are printable ASCII
-            bool isText = app_data.size() > 0 && app_data.size() <= 32;
-            for (size_t i = 0; isText && i < app_data.size(); i++) {
-                uint8_t c = app_data.data()[i];
-                if (c < 0x20 || c > 0x7E) isText = false;
+            // Use raw bytes as name if valid UTF-8 text (handles Rust raw UTF-8 announces)
+            bool isText = app_data.size() > 0 && app_data.size() <= 64;
+            const uint8_t* p = app_data.data();
+            size_t sz = app_data.size();
+            for (size_t i = 0; isText && i < sz; ) {
+                uint8_t c = p[i];
+                if (c >= 0x20 && c <= 0x7E) { i++; }             // printable ASCII
+                else if (c == 0x09) { i++; }                      // tab (ok in names)
+                else if ((c & 0xE0) == 0xC0 && i + 1 < sz &&     // 2-byte UTF-8
+                         (p[i+1] & 0xC0) == 0x80) { i += 2; }
+                else if ((c & 0xF0) == 0xE0 && i + 2 < sz &&     // 3-byte UTF-8
+                         (p[i+1] & 0xC0) == 0x80 &&
+                         (p[i+2] & 0xC0) == 0x80) { i += 3; }
+                else if ((c & 0xF8) == 0xF0 && i + 3 < sz &&     // 4-byte UTF-8
+                         (p[i+1] & 0xC0) == 0x80 &&
+                         (p[i+2] & 0xC0) == 0x80 &&
+                         (p[i+3] & 0xC0) == 0x80) { i += 4; }
+                else { isText = false; }
             }
             if (isText) {
-                rawName = app_data.toString();
+                rawName = std::string((const char*)p, sz);
             } else {
                 Serial.printf("[ANNOUNCE] Unknown app_data format (%d bytes): ", (int)app_data.size());
                 for (size_t i = 0; i < std::min((size_t)32, app_data.size()); i++) {

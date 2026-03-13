@@ -45,7 +45,25 @@ void NodesScreen::refreshList() {
         const auto& node = nodes[sorted[si].idx];
 
         char line[64];
-        std::string displayName = node.name.substr(0, 18);
+        // Truncate to ~18 visible chars, respecting UTF-8 boundaries
+        std::string displayName;
+        {
+            size_t chars = 0;
+            size_t i = 0;
+            const uint8_t* p = (const uint8_t*)node.name.data();
+            size_t sz = node.name.size();
+            while (i < sz && chars < 18) {
+                uint8_t c = p[i];
+                size_t seqLen = 1;
+                if ((c & 0xE0) == 0xC0) seqLen = 2;
+                else if ((c & 0xF0) == 0xE0) seqLen = 3;
+                else if ((c & 0xF8) == 0xF0) seqLen = 4;
+                if (i + seqLen > sz) break;
+                i += seqLen;
+                chars++;
+            }
+            displayName = node.name.substr(0, i);
+        }
         // Prefix saved nodes with * in all-nodes view
         if (!_contactsView && node.saved) {
             displayName = "*" + displayName;
@@ -148,7 +166,26 @@ void NodesScreen::render(M5Canvas& canvas) {
         canvas.setTextSize(Theme::FONT_SIZE);
         canvas.setTextColor(Theme::PRIMARY);
         canvas.setCursor(4, y + 2);
-        canvas.print(_selectedNodeName.c_str());
+        // Truncate to screen width (~26 chars at default font)
+        std::string truncName;
+        {
+            size_t chars = 0;
+            size_t i = 0;
+            const uint8_t* p = (const uint8_t*)_selectedNodeName.data();
+            size_t sz = _selectedNodeName.size();
+            while (i < sz && chars < 26) {
+                uint8_t c = p[i];
+                size_t seqLen = 1;
+                if ((c & 0xE0) == 0xC0) seqLen = 2;
+                else if ((c & 0xF0) == 0xE0) seqLen = 3;
+                else if ((c & 0xF8) == 0xF0) seqLen = 4;
+                if (i + seqLen > sz) break;
+                i += seqLen;
+                chars++;
+            }
+            truncName = _selectedNodeName.substr(0, i);
+        }
+        canvas.print(truncName.c_str());
         y += Theme::CHAR_H + 4;
         canvas.drawFastHLine(0, y, Theme::SCREEN_W, Theme::BORDER);
         y += 2;
