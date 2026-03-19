@@ -725,9 +725,12 @@ void loop() {
     }
 
     // 2. Reticulum + radio (throttled — 200Hz active, 20Hz screen off)
+    unsigned long rnsDuration = 0;
     if (now - lastRNS >= rnsInterval) {
         lastRNS = now;
+        unsigned long rnsStart = millis();
         rns.loop();
+        rnsDuration = millis() - rnsStart;
     }
 
     // 3. LXMF outgoing queue (every loop — cheap if empty)
@@ -774,13 +777,16 @@ void loop() {
         }
     }
 
-    // 6. TCP transport (with global budget)
-    if (wifiImpl) wifiImpl->loop();
+    // 6. TCP transport (with global budget) — skip if RNS was overloaded
     {
-        unsigned long tcpBudgetStart = millis();
-        for (auto* tcp : tcpClients) {
-            if (millis() - tcpBudgetStart >= TCP_GLOBAL_BUDGET_MS) break;
-            tcp->loop();
+        bool skipTcp = (rnsDuration > 200);
+        if (!skipTcp && wifiImpl) wifiImpl->loop();
+        if (!skipTcp) {
+            unsigned long tcpBudgetStart = millis();
+            for (auto* tcp : tcpClients) {
+                if (millis() - tcpBudgetStart >= TCP_GLOBAL_BUDGET_MS) break;
+                tcp->loop();
+            }
         }
     }
 
