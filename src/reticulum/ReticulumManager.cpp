@@ -141,7 +141,7 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
     RNS::Reticulum::probe_destination_enabled(true);
     // Cap table sizes — raised for 100+ node hubs while staying within ESP32 RAM
     RNS::Transport::path_table_maxsize(256);
-    RNS::Transport::announce_table_maxsize(64);
+    RNS::Transport::announce_table_maxsize(128);
     _reticulum.start();
     Serial.println("[RNS] Reticulum started (Endpoint)");
 
