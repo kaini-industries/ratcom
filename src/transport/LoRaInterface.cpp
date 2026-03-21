@@ -41,6 +41,15 @@ void LoRaInterface::stop() {
 void LoRaInterface::send_outgoing(const RNS::Bytes& data) {
     if (!_online || !_radio) return;
 
+    // Reject packets that exceed the LoRa MTU (255 bytes including 1-byte header).
+    // Sending truncated packets corrupts encryption (HMAC failures on receiver).
+    if (data.size() + RNODE_HEADER_L > MAX_PACKET_SIZE) {
+        Serial.printf("[LORA_IF] TX DROPPED: packet too large (%d + %d = %d > %d)\n",
+            (int)data.size(), RNODE_HEADER_L,
+            (int)(data.size() + RNODE_HEADER_L), MAX_PACKET_SIZE);
+        return;
+    }
+
     // Build RNode-compatible 1-byte header
     uint8_t header = (uint8_t)(random(256)) & RNODE_NIBBLE_SEQ;
 
