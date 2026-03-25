@@ -343,58 +343,70 @@ int SX1262::beginPacket(int implicitHeader) {
     return 1;
 }
 
-int SX1262::endPacket() {
+int SX1262::endPacket(bool async) {
     setPacketParams(_preambleLength, _implicitHeaderMode, _payloadLength, _crcMode);
 
-    // Start TX
     uint8_t timeout[3] = {0};
-    uint32_t txStart = millis();
+    _txStartMs = millis();
+    _txTimeoutMs = _txStartMs + (uint32_t)(getAirtime(_payloadLength) * MODEM_TIMEOUT_MULT) + 2000;
     executeOpcode(OP_TX_6X, timeout, 3);
 
-    // Wait for TX done
+    if (async) {
+        _txActive = true;
+        return 1;
+    }
+
+    // Blocking mode: wait for TX completion
     uint8_t buf[2] = {0};
     executeOpcodeRead(OP_GET_IRQ_STATUS_6X, buf, 2);
 
     bool timed_out = false;
-    uint32_t w_timeout = txStart + (uint32_t)(getAirtime(_payloadLength) * MODEM_TIMEOUT_MULT) + 2000;
-    while ((millis() < w_timeout) && ((buf[1] & IRQ_TX_DONE_MASK_6X) == 0)) {
+    while ((millis() < _txTimeoutMs) && ((buf[1] & IRQ_TX_DONE_MASK_6X) == 0)) {
         buf[0] = 0x00;
         buf[1] = 0x00;
         executeOpcodeRead(OP_GET_IRQ_STATUS_6X, buf, 2);
         yield();
     }
-    uint32_t txActual = millis() - txStart;
+    uint32_t txActual = millis() - _txStartMs;
 
-    if (millis() > w_timeout) { timed_out = true; }
-
-    uint16_t devErr = getDeviceErrors();
-    uint8_t status = getStatus();
-    uint8_t chipMode = (status >> 4) & 0x07;
-    uint8_t cmdStatus = (status >> 1) & 0x07;
+    if (millis() > _txTimeoutMs) { timed_out = true; }
 
     if (timed_out) {
-        Serial.printf("[SX1262] TX TIMEOUT: payload=%d actual=%dms calc=%.0fms irq=0x%02X%02X status=0x%02X(mode=%d cmd=%d) errors=0x%04X\n",
-            _payloadLength, txActual, getAirtime(_payloadLength), buf[0], buf[1], status, chipMode, cmdStatus, devErr);
+        Serial.printf("[SX1262] TX TIMEOUT: payload=%d actual=%dms calc=%.0fms\n",
+            _payloadLength, txActual, getAirtime(_payloadLength));
     } else {
-        Serial.printf("[SX1262] TX OK: payload=%d actual=%dms calc=%.0fms status=0x%02X(mode=%d cmd=%d) errors=0x%04X\n",
-            _payloadLength, txActual, getAirtime(_payloadLength), status, chipMode, cmdStatus, devErr);
-    }
-    // Decode device errors if any
-    if (devErr) {
-        if (devErr & 0x01) Serial.println("  ERR: RC64K calibration failed");
-        if (devErr & 0x02) Serial.println("  ERR: RC13M calibration failed");
-        if (devErr & 0x04) Serial.println("  ERR: PLL calibration failed");
-        if (devErr & 0x08) Serial.println("  ERR: ADC calibration failed");
-        if (devErr & 0x10) Serial.println("  ERR: IMG calibration failed");
-        if (devErr & 0x20) Serial.println("  ERR: XOSC start failed");
-        if (devErr & 0x40) Serial.println("  ERR: PLL lock failed");
+        Serial.printf("[SX1262] TX OK: payload=%d actual=%dms calc=%.0fms\n",
+            _payloadLength, txActual, getAirtime(_payloadLength));
     }
 
-    // Clear TX done IRQ
     uint8_t mask[2] = {0x00, IRQ_TX_DONE_MASK_6X};
     executeOpcode(OP_CLEAR_IRQ_STATUS_6X, mask, 2);
 
     return !timed_out;
+}
+
+bool SX1262::isTxBusy() {
+    if (!_txActive) return false;
+
+    if (millis() > _txTimeoutMs) {
+        Serial.printf("[SX1262] TX ASYNC TIMEOUT after %dms\n",
+                      (int)(millis() - _txStartMs));
+        uint8_t mask[2] = {0x00, IRQ_TX_DONE_MASK_6X};
+        executeOpcode(OP_CLEAR_IRQ_STATUS_6X, mask, 2);
+        _txActive = false;
+        return false;
+    }
+
+    uint8_t buf[2] = {0};
+    executeOpcodeRead(OP_GET_IRQ_STATUS_6X, buf, 2);
+    if (buf[1] & IRQ_TX_DONE_MASK_6X) {
+        uint8_t mask[2] = {0x00, IRQ_TX_DONE_MASK_6X};
+        executeOpcode(OP_CLEAR_IRQ_STATUS_6X, mask, 2);
+        _txActive = false;
+        return false;
+    }
+
+    return true;  // Still transmitting
 }
 
 size_t SX1262::write(uint8_t byte) {
@@ -427,6 +439,16 @@ void SX1262::receive(int size) {
     } else {
         explicitHeaderMode();
     }
+
+    // Set up DIO1 interrupt for RX done (enables packetAvailable flag)
+    if (!_onReceive) {
+        pinMode(_irq, INPUT);
+        uint8_t irqBuf[8] = {0xFF, 0xFF, 0x00, IRQ_RX_DONE_MASK_6X, 0x00, 0x00, 0x00, 0x00};
+        executeOpcode(OP_SET_IRQ_FLAGS_6X, irqBuf, 8);
+        attachInterrupt(digitalPinToInterrupt(_irq), onDio0Rise, RISING);
+    }
+
+    packetAvailable = false;
 
     if (_rxen != -1) {
         rxAntEnable();
@@ -799,10 +821,7 @@ float SX1262::getAirtime(uint16_t written) {
 
 void IRAM_ATTR SX1262::onDio0Rise() {
     if (_instance) {
-        // Don't call handleDio0Rise() from ISR — it does SPI which deadlocks
-        // on the shared bus when the display holds the SPI mutex (causes
-        // "Interrupt wdt timeout on CPU1" crash). LoRaInterface::loop() polls
-        // parsePacket() which reads the radio buffer from main loop context.
+        _instance->packetAvailable = true;
     }
 }
 

@@ -22,26 +22,31 @@ bool LXMFManager::begin(ReticulumManager* rns, MessageStore* store) {
 void LXMFManager::loop() {
     if (_outQueue.empty()) return;
     unsigned long now = millis();
+    int processed = 0;
 
-    for (auto it = _outQueue.begin(); it != _outQueue.end(); ++it) {
+    for (auto it = _outQueue.begin(); it != _outQueue.end(); ) {
+        // Time-budgeted: process up to 3 messages within 10ms
+        if (processed >= 3 || (processed > 0 && millis() - now >= 10)) break;
+
         LXMFMessage& msg = *it;
 
         // Per-message retry cooldown: 2 seconds between attempts
-        if (msg.retries > 0 && (now - msg.lastRetryMs) < 2000) continue;
+        if (msg.retries > 0 && (millis() - msg.lastRetryMs) < 2000) { ++it; continue; }
 
-        msg.lastRetryMs = now;
+        msg.lastRetryMs = millis();
 
         if (sendDirect(msg)) {
+            processed++;
             Serial.printf("[LXMF] Queue drain: status=%s dest=%s\n",
                           msg.statusStr(), msg.destHash.toHex().substr(0, 8).c_str());
             if (_statusCb) {
                 std::string peerHex = msg.destHash.toHex();
                 _statusCb(peerHex, msg.timestamp, msg.status);
             }
-            _outQueue.erase(it);
-            return;  // One send per loop() call to avoid hogging CPU
+            it = _outQueue.erase(it);
+        } else {
+            ++it;
         }
-        // sendDirect returned false — message stays in queue, try next
     }
 }
 
@@ -81,6 +86,21 @@ bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& con
 }
 
 bool LXMFManager::sendDirect(LXMFMessage& msg) {
+    Serial.printf("[LXMF] sendDirect: dest=%s link=%s pending=%s\n",
+        msg.destHash.toHex().substr(0, 12).c_str(),
+        _outLink ? (_outLink.status() == RNS::Type::Link::ACTIVE ? "ACTIVE" : "INACTIVE") : "NONE",
+        _outLinkPending ? "yes" : "no");
+
+    // Reset stale link-pending state
+    if (_outLinkPending) {
+        bool linkReady = _outLink && _outLink.status() == RNS::Type::Link::ACTIVE;
+        if (!linkReady) {
+            _outLinkPending = false;
+            _outLink = {RNS::Type::NONE};
+            Serial.println("[LXMF] Clearing stale link-pending (link not active)");
+        }
+    }
+
     RNS::Identity recipientId = RNS::Identity::recall(msg.destHash);
     if (!recipientId) {
         msg.retries++;
@@ -173,24 +193,41 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
         }
     }
 
-    // Fallback: opportunistic delivery (always available, no delay)
+    // Fallback: opportunistic or queue for link-based resource transfer
     if (!sent) {
         RNS::Bytes payloadBytes(payload.data(), payload.size());
-        if (payloadBytes.size() > RNS::Type::Reticulum::MDU) {
-            Serial.printf("[LXMF] payload too large: %d > MDU\n", (int)payloadBytes.size());
-            msg.status = LXMFStatus::FAILED;
-            return true;
+        if (payloadBytes.size() <= RNS::Type::Reticulum::MDU) {
+            // Small enough for single opportunistic packet
+            Serial.printf("[LXMF] sending opportunistic: %d bytes to %s\n",
+                          (int)payloadBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
+            RNS::Packet packet(outDest, payloadBytes);
+            RNS::PacketReceipt receipt = packet.send();
+            if (receipt) { sent = true; }
+        } else {
+            // Too large for opportunistic — need link + resource transfer
+            Serial.printf("[LXMF] Message too large for opportunistic (%d bytes > MDU), needs link (retry %d)\n",
+                          (int)payloadBytes.size(), msg.retries);
+            if (msg.retries % 3 == 0 && (!_outLink || _outLinkDestHash != msg.destHash
+                || _outLink.status() != RNS::Type::Link::ACTIVE)) {
+                _outLinkPendingHash = msg.destHash;
+                _outLinkPending = true;
+                Serial.printf("[LXMF] Establishing link to %s for resource transfer\n",
+                              msg.destHash.toHex().substr(0, 8).c_str());
+                RNS::Link newLink(outDest, onOutLinkEstablished, onOutLinkClosed);
+            }
+            msg.retries++;
+            if (msg.retries >= 30) {
+                Serial.printf("[LXMF] Link for %s not established after %d retries — FAILED\n",
+                              msg.destHash.toHex().substr(0, 8).c_str(), msg.retries);
+                msg.status = LXMFStatus::FAILED;
+                return true;
+            }
+            return false;  // Keep in queue, retry when link is established
         }
-        Serial.printf("[LXMF] sending opportunistic: %d bytes to %s\n",
-                      (int)payloadBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
-        RNS::Packet packet(outDest, payloadBytes);
-        RNS::PacketReceipt receipt = packet.send();
-        if (receipt) { sent = true; }
     }
 
     if (sent) {
         msg.status = LXMFStatus::SENT;
-        // messageId already computed by packFull() matching Python's LXMessage.pack()
         Serial.printf("[LXMF] SENT OK: msgId=%s\n", msg.messageId.toHex().substr(0, 8).c_str());
     } else {
         msg.status = LXMFStatus::FAILED;
@@ -198,15 +235,8 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
                       msg.destHash.toHex().substr(0, 8).c_str());
     }
 
-    // Background: establish link for future messages to this peer
-    if (!_outLinkPending && (!_outLink || _outLinkDestHash != msg.destHash
-        || _outLink.status() == RNS::Type::Link::CLOSED)) {
-        _outLinkPendingHash = msg.destHash;
-        _outLinkPending = true;
-        Serial.printf("[LXMF] Establishing link to %s for future messages\n",
-                      msg.destHash.toHex().substr(0, 8).c_str());
-        RNS::Link newLink(outDest, onOutLinkEstablished, onOutLinkClosed);
-    }
+    // Link establishment is now only triggered on-demand when a message
+    // is too large for opportunistic delivery (see large-message path above).
 
     return true;
 }

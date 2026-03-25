@@ -283,6 +283,13 @@ static RNS::Bytes encodeAnnounceName(const String& name) {
 
 static void announceWithName() {
     RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
+    Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes\n",
+        userConfig.settings().displayName.c_str(), (int)appData.size());
+    if (appData.size() > 0) {
+        Serial.printf("[ANNOUNCE-TX] hex: ");
+        for (size_t i = 0; i < appData.size() && i < 20; i++) Serial.printf("%02X", appData.data()[i]);
+        Serial.println();
+    }
     rns.announce(appData);
     ui.statusBar().flashAnnounce();
 }

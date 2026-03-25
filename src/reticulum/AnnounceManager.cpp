@@ -171,6 +171,10 @@ void AnnounceManager::received_announce(
     // Extract display name from app_data (do this before filtering so name cache works)
     std::string name;
     if (app_data.size() > 0) {
+        Serial.printf("[ANNOUNCE-RX] app_data: %d bytes hex: ", (int)app_data.size());
+        for (size_t i = 0; i < std::min((size_t)16, app_data.size()); i++)
+            Serial.printf("%02X", app_data.data()[i]);
+        Serial.println();
         std::string rawName = extractMsgPackName(app_data.data(), app_data.size());
         if (rawName.empty()) {
             // Use raw bytes as name if valid UTF-8 text (handles Rust raw UTF-8 announces)

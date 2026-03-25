@@ -24,7 +24,8 @@ public:
 
     // --- TX ---
     int  beginPacket(int implicitHeader = 0);
-    int  endPacket();
+    int  endPacket(bool async = false);
+    bool isTxBusy();
     size_t write(uint8_t byte);
     size_t write(const uint8_t* buffer, size_t size);
 
@@ -133,8 +134,16 @@ private:
     bool _tcxo = false;
     bool _dio2_as_rf_switch = false;
 
+    bool _txActive = false;
+    uint32_t _txStartMs = 0;
+    uint32_t _txTimeoutMs = 0;
+
     uint8_t _packet[MAX_PACKET_SIZE] = {};
     void (*_onReceive)(int) = nullptr;
+
+public:
+    volatile bool packetAvailable = false;
+private:
 
     // DCD timing
     unsigned long _preambleDetectedAt = 0;
