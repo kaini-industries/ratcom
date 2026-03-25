@@ -169,7 +169,7 @@ void onHotkeySettings() {
     ui.tabBar().setActiveTab(TabBar::TAB_SETUP);
     ui.setScreen(&settingsScreen);
 }
-static void announceWithName();
+static void announceWithName(bool silent = false);
 void onHotkeyAnnounce() {
     Serial.println("[HOTKEY] Force announce");
     announceWithName();
@@ -281,17 +281,15 @@ static RNS::Bytes encodeAnnounceName(const String& name) {
     return RNS::Bytes(buf, 3 + len);
 }
 
-static void announceWithName() {
+static void announceWithName(bool silent) {
     RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
-    Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes\n",
-        userConfig.settings().displayName.c_str(), (int)appData.size());
-    if (appData.size() > 0) {
-        Serial.printf("[ANNOUNCE-TX] hex: ");
-        for (size_t i = 0; i < appData.size() && i < 20; i++) Serial.printf("%02X", appData.data()[i]);
-        Serial.println();
-    }
+    Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes silent=%s\n",
+        userConfig.settings().displayName.c_str(), (int)appData.size(),
+        silent ? "yes" : "no");
     rns.announce(appData);
-    ui.statusBar().flashAnnounce();
+    if (!silent) {
+        ui.statusBar().flashAnnounce();
+    }
 }
 
 // =============================================================================
@@ -730,7 +728,7 @@ void loop() {
         if (rns.loraInterface() && rns.loraInterface()->airtimeUtilization() > LoRaInterface::AIRTIME_THROTTLE) {
             Serial.println("[AUTO] Skipping announce: LoRa airtime > 25%");
         } else {
-            announceWithName();
+            announceWithName(!power.isScreenOn());
             Serial.println("[AUTO] Periodic announce");
         }
     }
