@@ -192,6 +192,10 @@ void LoRaInterface::loop() {
     uint8_t raw[MAX_PACKET_SIZE];
     memcpy(raw, _radio->packetBuffer(), packetSize);
 
+    // Capture signal quality before any further processing
+    _lastRxRssi = _radio->packetRssi();
+    _lastRxSnr = _radio->packetSnr();
+
     uint8_t header = raw[0];
     int payloadSize = packetSize - RNODE_HEADER_L;
     uint8_t seq = header & RNODE_NIBBLE_SEQ;
@@ -205,12 +209,12 @@ void LoRaInterface::loop() {
             _splitRxTimestamp = millis();
 
             Serial.printf("[LORA_IF] RX SPLIT frame 1: %d bytes (seq=0x%02X), RSSI=%d, SNR=%.1f\n",
-                payloadSize, seq, _radio->packetRssi(), _radio->packetSnr());
+                payloadSize, seq, _lastRxRssi, _lastRxSnr);
             _radio->receive();
             return;
         } else if (seq == _splitRxSeq) {
             Serial.printf("[LORA_IF] RX SPLIT frame 2: %d bytes (seq=0x%02X), RSSI=%d, SNR=%.1f\n",
-                payloadSize, seq, _radio->packetRssi(), _radio->packetSnr());
+                payloadSize, seq, _lastRxRssi, _lastRxSnr);
 
             _splitRxBuffer.append(raw + RNODE_HEADER_L, payloadSize);
             int totalSize = _splitRxBuffer.size();
@@ -244,7 +248,7 @@ void LoRaInterface::loop() {
 
     Serial.printf("[LORA_IF] RX %d bytes (hdr=0x%02X, payload=%d), RSSI=%d, SNR=%.1f\n",
                   packetSize, header, payloadSize,
-                  _radio->packetRssi(), _radio->packetSnr());
+                  _lastRxRssi, _lastRxSnr);
 
     RNS::Bytes buf(payloadSize);
     memcpy(buf.writable(payloadSize), raw + RNODE_HEADER_L, payloadSize);

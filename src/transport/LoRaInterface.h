@@ -19,6 +19,9 @@ public:
 
     float airtimeUtilization() const;
 
+    int lastRxRssi() const { return _lastRxRssi; }
+    float lastRxSnr() const { return _lastRxSnr; }
+
 protected:
     virtual void send_outgoing(const RNS::Bytes& data) override;
 
@@ -44,6 +47,9 @@ private:
     uint8_t _splitRxSeq = 0;
     RNS::Bytes _splitRxBuffer;
     unsigned long _splitRxTimestamp = 0;
+
+    int _lastRxRssi = 0;
+    float _lastRxSnr = 0;
 
     unsigned long _airtimeWindowStart = 0;
     float _airtimeAccumMs = 0;

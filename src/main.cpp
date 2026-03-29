@@ -456,6 +456,7 @@ void setup() {
     announceManager = new AnnounceManager();
     announceManager->setStorage(&sdStore, &flash);
     announceManager->setLocalDestHash(rns.destination().hash());
+    if (rns.loraInterface()) announceManager->setLoRaInterface(rns.loraInterface());
     announceManager->loadContacts();
     announceManager->loadNameCache();
     announceHandler = RNS::HAnnounceHandler(announceManager);

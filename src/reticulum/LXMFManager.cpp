@@ -314,6 +314,12 @@ void LXMFManager::processIncoming(const uint8_t* data, size_t len, const RNS::By
         msg.destHash = destHash;
     }
 
+    // Stamp with receiver's local time if sender's timestamp is missing/invalid
+    if (msg.timestamp < 1700000000) {
+        time_t now = time(nullptr);
+        if (now > 1700000000) msg.timestamp = (double)now;
+    }
+
     Serial.printf("[LXMF] From %s: \"%s\"\n",
                   msg.sourceHash.toHex().substr(0, 8).c_str(),
                   msg.content.c_str());

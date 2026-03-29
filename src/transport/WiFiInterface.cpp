@@ -9,10 +9,12 @@ WiFiInterface::WiFiInterface(const char* name)
     _bitrate = 1000000;  // WiFi is fast
     _HW_MTU = 500;
     _apPassword = WIFI_AP_PASSWORD;
+    _txBuffer = (uint8_t*)malloc(TX_BUFFER_SIZE);
 }
 
 WiFiInterface::~WiFiInterface() {
     stop();
+    if (_txBuffer) { free(_txBuffer); _txBuffer = nullptr; }
 }
 
 void WiFiInterface::setAPCredentials(const char* ssid, const char* password) {
@@ -125,18 +127,42 @@ void WiFiInterface::loop() {
 }
 
 // HDLC-like framing: [0x7E] [escaped data] [0x7E]
+// Buffered write — single syscall instead of per-byte writes
 void WiFiInterface::sendFrame(WiFiClient& client, const uint8_t* data, size_t len) {
-    client.write(FRAME_START);
-    for (size_t i = 0; i < len; i++) {
+    if (!_txBuffer) {
+        // Fallback: per-byte writes if buffer allocation failed
+        client.write(FRAME_START);
+        for (size_t i = 0; i < len; i++) {
+            if (data[i] == FRAME_START || data[i] == FRAME_ESC) {
+                client.write(FRAME_ESC);
+                client.write(data[i] ^ FRAME_XOR);
+            } else {
+                client.write(data[i]);
+            }
+        }
+        client.write(FRAME_START);
+        client.flush();
+        return;
+    }
+    // Worst case: every byte escapes (2x) + 2 delimiters
+    size_t maxFrameLen = len * 2 + 2;
+    if (maxFrameLen > TX_BUFFER_SIZE) {
+        Serial.printf("[WIFI] TX frame too large (%d bytes), dropping\n", (int)len);
+        return;
+    }
+    size_t pos = 0;
+    _txBuffer[pos++] = FRAME_START;
+    for (size_t i = 0; i < len && pos < TX_BUFFER_SIZE - 2; i++) {
         if (data[i] == FRAME_START || data[i] == FRAME_ESC) {
-            client.write(FRAME_ESC);
-            client.write(data[i] ^ FRAME_XOR);
+            _txBuffer[pos++] = FRAME_ESC;
+            _txBuffer[pos++] = data[i] ^ FRAME_XOR;
         } else {
-            client.write(data[i]);
+            _txBuffer[pos++] = data[i];
         }
     }
-    client.write(FRAME_START);
-    client.flush();
+    _txBuffer[pos++] = FRAME_START;
+    client.write(_txBuffer, pos);
+    // No flush() — TCP_NODELAY sends immediately without Nagle delay
 }
 
 int WiFiInterface::readFrame(WiFiClient& client, uint8_t* buffer, size_t maxLen) {

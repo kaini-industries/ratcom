@@ -58,5 +58,22 @@
 #define SCREEN_OFF_TIMEOUT_MS   60000
 #define SCREEN_DIM_BRIGHTNESS   64     // 25% of 255
 
+// --- Radio Regions ---
+enum RadioRegion : uint8_t {
+    REGION_AMERICAS  = 0,  // 915 MHz (902-928 ISM)
+    REGION_EUROPE    = 1,  // 868 MHz (863-870)
+    REGION_AUSTRALIA = 2,  // 915 MHz (915-928)
+    REGION_ASIA      = 3,  // 923 MHz (AS923)
+    REGION_COUNT     = 4
+};
+
+static constexpr uint32_t REGION_FREQ[REGION_COUNT] = {
+    915000000, 868000000, 915000000, 923000000
+};
+
+static const char* const REGION_LABELS[REGION_COUNT] = {
+    "Americas (915)", "Europe (868)", "Australia (915)", "Asia (923)"
+};
+
 // --- Serial Debug ---
 #define SERIAL_BAUD  115200

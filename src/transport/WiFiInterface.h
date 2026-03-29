@@ -54,6 +54,8 @@ private:
     WiFiServer _server;
     std::vector<WiFiClient> _clients;
     uint8_t _rxBuffer[600];
+    uint8_t* _txBuffer = nullptr;
+    static constexpr size_t TX_BUFFER_SIZE = 1202;  // 600 * 2 + 2 (worst-case escaped frame)
 
     static constexpr uint8_t FRAME_START = 0x7E;
     static constexpr uint8_t FRAME_ESC   = 0x7D;

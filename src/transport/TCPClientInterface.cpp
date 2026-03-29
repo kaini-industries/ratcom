@@ -82,7 +82,7 @@ void TCPClientInterface::loop() {
 
     // Drain multiple incoming frames per loop (up to 15, time-boxed)
     unsigned long tcpStart = millis();
-    for (int i = 0; i < 15 && _client.available() && (millis() - tcpStart < TCP_LOOP_BUDGET_MS); i++) {
+    for (int i = 0; i < 5 && _client.available() && (millis() - tcpStart < TCP_LOOP_BUDGET_MS); i++) {
         unsigned long rxStart = millis();
         int len = readFrame();
         if (len > 0) {

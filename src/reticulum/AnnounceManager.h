@@ -11,6 +11,7 @@
 
 class SDStore;
 class FlashStore;
+class LoRaInterface;
 
 struct DiscoveredNode {
     RNS::Bytes hash;
@@ -36,6 +37,7 @@ public:
     // Storage for contact persistence
     void setStorage(SDStore* sd, FlashStore* flash);
     void setLocalDestHash(const RNS::Bytes& hash) { _localDestHash = hash; }
+    void setLoRaInterface(LoRaInterface* li) { _loraIf = li; }
 
     // Save/load persisted contacts
     void saveContacts();
@@ -83,6 +85,7 @@ private:
 
     SDStore* _sd = nullptr;
     FlashStore* _flash = nullptr;
+    LoRaInterface* _loraIf = nullptr;
     RNS::Bytes _localDestHash;
     bool _contactsDirty = false;
     bool _nameCacheDirty = false;
