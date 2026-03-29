@@ -36,7 +36,8 @@ private:
     unsigned long _lastAttempt = 0;
     unsigned long _lastRxTime = 0;
     uint8_t* _rxBuffer = nullptr;
-    uint8_t* _txBuffer = nullptr;  // PSRAM-allocated send frame buffer
+    uint8_t* _txBuffer = nullptr;
+    uint8_t* _wrapBuffer = nullptr;  // Heap-allocated packet rewrite buffer
     static constexpr size_t RX_BUFFER_SIZE = 2048;
     static constexpr size_t TX_BUFFER_SIZE = RX_BUFFER_SIZE * 2 + 2;
 

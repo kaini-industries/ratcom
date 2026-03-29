@@ -316,8 +316,9 @@ void ReticulumManager::loop() {
 
 void ReticulumManager::startPersistTask() {
     _persistQueue = xQueueCreate(1, sizeof(uint8_t));
-    xTaskCreatePinnedToCore(persistTaskFunc, "persist", 8192, this, 1, &_persistTask, 0);
-    Serial.println("[RNS] Persist task started on core 0");
+    // Pin to core 1 (same as main loop) — core 0 is WiFi/lwIP, sharing LittleFS across cores corrupts FS
+    xTaskCreatePinnedToCore(persistTaskFunc, "persist", 8192, this, 1, &_persistTask, 1);
+    Serial.println("[RNS] Persist task started on core 1");
 }
 
 void ReticulumManager::persistTaskFunc(void* param) {

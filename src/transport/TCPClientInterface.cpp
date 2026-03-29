@@ -8,16 +8,19 @@ TCPClientInterface::TCPClientInterface(const char* host, uint16_t port, const ch
     _OUT = true;
     _bitrate = 1000000;
     _HW_MTU = 500;
-    _rxBuffer = (uint8_t*)ps_malloc(RX_BUFFER_SIZE);
-    if (!_rxBuffer) _rxBuffer = (uint8_t*)malloc(RX_BUFFER_SIZE);
-    _txBuffer = (uint8_t*)ps_malloc(TX_BUFFER_SIZE);
-    if (!_txBuffer) _txBuffer = (uint8_t*)malloc(TX_BUFFER_SIZE);
+    _rxBuffer = (uint8_t*)malloc(RX_BUFFER_SIZE);
+    _txBuffer = (uint8_t*)malloc(TX_BUFFER_SIZE);
+    _wrapBuffer = (uint8_t*)malloc(RX_BUFFER_SIZE);
+    if (!_rxBuffer || !_txBuffer || !_wrapBuffer) {
+        Serial.println("[TCP] FATAL: buffer allocation failed");
+    }
 }
 
 TCPClientInterface::~TCPClientInterface() {
     stop();
     if (_rxBuffer) { free(_rxBuffer); _rxBuffer = nullptr; }
     if (_txBuffer) { free(_txBuffer); _txBuffer = nullptr; }
+    if (_wrapBuffer) { free(_wrapBuffer); _wrapBuffer = nullptr; }
 }
 
 bool TCPClientInterface::start() {
@@ -160,28 +163,28 @@ void TCPClientInterface::send_outgoing(const RNS::Bytes& data) {
                     _txDropCount++;
                     return;
                 }
-                uint8_t wrapped[RX_BUFFER_SIZE];
-                wrapped[0] = new_flags;
-                wrapped[1] = data.data()[1];  // hops
-                memcpy(wrapped + 2, _hubTransportId, 16);  // transport_id
-                memcpy(wrapped + 18, data.data() + 2, data.size() - 2);  // dest_hash + context + payload
+                if (!_wrapBuffer) return;
+                _wrapBuffer[0] = new_flags;
+                _wrapBuffer[1] = data.data()[1];  // hops
+                memcpy(_wrapBuffer + 2, _hubTransportId, 16);  // transport_id
+                memcpy(_wrapBuffer + 18, data.data() + 2, data.size() - 2);  // dest_hash + context + payload
 
                 Serial.printf("[TCP] TX %d->%d bytes (H1->H2 wrap) to %s:%d\n",
                               (int)data.size(), (int)new_len, _host.c_str(), _port);
-                sendFrame(wrapped, new_len);
+                sendFrame(_wrapBuffer, new_len);
                 InterfaceImpl::handle_outgoing(data);  // Stats use original size
                 return;
             }
             else if (data.size() >= 35 && memcmp(data.data() + 2, _hubTransportId, 16) != 0) {
                 // Header2 with wrong transport_id → fix it
                 // Transport::outbound() may have used _received_from=destination_hash
-                uint8_t fixed[RX_BUFFER_SIZE];
-                memcpy(fixed, data.data(), data.size());
-                memcpy(fixed + 2, _hubTransportId, 16);
+                if (!_wrapBuffer) return;
+                memcpy(_wrapBuffer, data.data(), data.size());
+                memcpy(_wrapBuffer + 2, _hubTransportId, 16);
 
                 Serial.printf("[TCP] TX %d bytes (H2 transport_id fixed) to %s:%d\n",
                               (int)data.size(), _host.c_str(), _port);
-                sendFrame(fixed, data.size());
+                sendFrame(_wrapBuffer, data.size());
                 InterfaceImpl::handle_outgoing(data);
                 return;
             }

@@ -10,6 +10,7 @@ WiFiInterface::WiFiInterface(const char* name)
     _HW_MTU = 500;
     _apPassword = WIFI_AP_PASSWORD;
     _txBuffer = (uint8_t*)malloc(TX_BUFFER_SIZE);
+    if (!_txBuffer) Serial.println("[WIFI] WARNING: TX buffer allocation failed");
 }
 
 WiFiInterface::~WiFiInterface() {

@@ -741,12 +741,17 @@ void loop() {
             wifiSTAConnected = true;
             Serial.printf("[WIFI] STA connected: %s\n", WiFi.localIP().toString().c_str());
 
+            // NTP time sync — only start once per boot (configTzTime blocks for 5-15s)
             {
-                int8_t off = userConfig.settings().utcOffset;
-                char tz[16];
-                snprintf(tz, sizeof(tz), "UTC%d", -off);
-                configTzTime(tz, "pool.ntp.org", "time.nist.gov");
-                Serial.printf("[NTP] Time sync started (UTC%+d, TZ=%s)\n", off, tz);
+                static bool ntpStarted = false;
+                if (!ntpStarted) {
+                    int8_t off = userConfig.settings().utcOffset;
+                    char tz[16];
+                    snprintf(tz, sizeof(tz), "UTC%d", -off);
+                    configTzTime(tz, "pool.ntp.org", "time.nist.gov");
+                    ntpStarted = true;
+                    Serial.printf("[NTP] Time sync started (UTC%+d, TZ=%s)\n", off, tz);
+                }
             }
 
             // Recreate TCP clients on every WiFi connect (old clients may have stale sockets)
