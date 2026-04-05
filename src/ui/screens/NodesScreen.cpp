@@ -10,10 +10,52 @@ void NodesScreen::onExit() {
     _showingActions = false;
 }
 
+// Helper: truncate name to maxChars respecting UTF-8 boundaries
+static std::string truncUTF8(const std::string& name, size_t maxChars) {
+    size_t chars = 0, i = 0;
+    const uint8_t* p = (const uint8_t*)name.data();
+    size_t sz = name.size();
+    while (i < sz && chars < maxChars) {
+        uint8_t c = p[i];
+        size_t seqLen = 1;
+        if ((c & 0xE0) == 0xC0) seqLen = 2;
+        else if ((c & 0xF0) == 0xE0) seqLen = 3;
+        else if ((c & 0xF8) == 0xF0) seqLen = 4;
+        if (i + seqLen > sz) break;
+        i += seqLen;
+        chars++;
+    }
+    return name.substr(0, i);
+}
+
+// Helper: format a node line
+static void formatNodeLine(char* line, size_t lineSize, const DiscoveredNode& node) {
+    std::string displayName = truncUTF8(node.name, 18);
+    unsigned long ago = (millis() - node.lastSeen) / 1000;
+    if (ago < 60) {
+        if (node.hops < 128)
+            snprintf(line, lineSize, "%-20s %3lus %dhop", displayName.c_str(), ago, node.hops);
+        else
+            snprintf(line, lineSize, "%-20s %3lus", displayName.c_str(), ago);
+    } else {
+        if (node.hops < 128)
+            snprintf(line, lineSize, "%-20s %3lum %dhop", displayName.c_str(), ago / 60, node.hops);
+        else
+            snprintf(line, lineSize, "%-20s %3lum", displayName.c_str(), ago / 60);
+    }
+}
+
+// Helper: staleness color for a node
+static uint16_t stalenessColor(const DiscoveredNode& node) {
+    unsigned long ageMs = millis() - node.lastSeen;
+    if (ageMs > 1800000) return Theme::MUTED;
+    if (ageMs > 300000) return Theme::BORDER + 0x0220;
+    return 0;  // default
+}
+
 void NodesScreen::refreshList() {
     if (!_announces) return;
 
-    // Remember currently selected node hash
     std::string prevSelected;
     int oldIdx = _list.getSelectedIndex();
     if (oldIdx >= 0 && oldIdx < (int)_nodeHashes.size()) {
@@ -22,75 +64,77 @@ void NodesScreen::refreshList() {
 
     _list.clear();
     _nodeHashes.clear();
+    _contactCount = 0;
 
-    // Sort by pre-computed lowercase keys — avoids copying the entire vector
     const auto& nodes = _announces->nodes();
+
+    // Separate contacts and peers, sort each alphabetically
     struct SortEntry { int idx; std::string lower; };
-    std::vector<SortEntry> sorted;
-    sorted.reserve(nodes.size());
+    std::vector<SortEntry> contacts, peers;
+
     for (int i = 0; i < (int)nodes.size(); i++) {
-        if (_contactsView && !nodes[i].saved) continue;
         std::string l = nodes[i].name;
         std::transform(l.begin(), l.end(), l.begin(), ::tolower);
-        sorted.push_back({i, std::move(l)});
+        if (nodes[i].saved) {
+            contacts.push_back({i, std::move(l)});
+        } else {
+            peers.push_back({i, std::move(l)});
+        }
     }
-    std::sort(sorted.begin(), sorted.end(), [](const SortEntry& a, const SortEntry& b) {
+
+    // Sort: letters before numbers, then alphabetical
+    auto sortFn = [](const SortEntry& a, const SortEntry& b) {
+        bool aDigit = !a.lower.empty() && a.lower[0] >= '0' && a.lower[0] <= '9';
+        bool bDigit = !b.lower.empty() && b.lower[0] >= '0' && b.lower[0] <= '9';
+        if (aDigit != bDigit) return bDigit;
         return a.lower < b.lower;
-    });
+    };
+    std::sort(contacts.begin(), contacts.end(), sortFn);
+    std::sort(peers.begin(), peers.end(), sortFn);
 
     _lastKnownCount = (int)nodes.size();
-
     int newSelectedIdx = 0;
-    for (size_t si = 0; si < sorted.size(); si++) {
-        const auto& node = nodes[sorted[si].idx];
 
-        char line[64];
-        // Truncate to ~18 visible chars, respecting UTF-8 boundaries
-        std::string displayName;
-        {
-            size_t chars = 0;
-            size_t i = 0;
-            const uint8_t* p = (const uint8_t*)node.name.data();
-            size_t sz = node.name.size();
-            while (i < sz && chars < 18) {
-                uint8_t c = p[i];
-                size_t seqLen = 1;
-                if ((c & 0xE0) == 0xC0) seqLen = 2;
-                else if ((c & 0xF0) == 0xE0) seqLen = 3;
-                else if ((c & 0xF8) == 0xF0) seqLen = 4;
-                if (i + seqLen > sz) break;
-                i += seqLen;
-                chars++;
+    // === Contacts section (only if contacts exist) ===
+    if (!contacts.empty()) {
+        for (auto& entry : contacts) {
+            const auto& node = nodes[entry.idx];
+            char line[64];
+            formatNodeLine(line, sizeof(line), node);
+            _list.addItem(line, stalenessColor(node));
+            std::string hexStr = node.hash.toHex();
+            _nodeHashes.push_back(hexStr);
+            if (!prevSelected.empty() && hexStr == prevSelected) {
+                newSelectedIdx = (int)_nodeHashes.size() - 1;
             }
-            displayName = node.name.substr(0, i);
         }
-        // Prefix saved nodes with * in all-nodes view
-        if (!_contactsView && node.saved) {
-            displayName = "*" + displayName;
-        }
-        unsigned long ago = (millis() - node.lastSeen) / 1000;
-        if (ago < 60) {
-            if (node.hops < 128)
-                snprintf(line, sizeof(line), "%-20s %3lus %dhop", displayName.c_str(), ago, node.hops);
-            else
-                snprintf(line, sizeof(line), "%-20s %3lus", displayName.c_str(), ago);
-        } else {
-            if (node.hops < 128)
-                snprintf(line, sizeof(line), "%-20s %3lum %dhop", displayName.c_str(), ago / 60, node.hops);
-            else
-                snprintf(line, sizeof(line), "%-20s %3lum", displayName.c_str(), ago / 60);
-        }
-        _list.addItem(line);
+        _contactCount = (int)contacts.size();
 
+        // Separator between contacts and peers
+        if (!peers.empty()) {
+            char sep[32];
+            snprintf(sep, sizeof(sep), "-- Peers (%d) --", (int)peers.size());
+            _list.addItem(sep, Theme::MUTED);
+            _nodeHashes.push_back("");  // not selectable
+        }
+    }
+
+    // === Peers section (always shown) ===
+    for (auto& entry : peers) {
+        const auto& node = nodes[entry.idx];
+        char line[64];
+        formatNodeLine(line, sizeof(line), node);
+        _list.addItem(line, stalenessColor(node));
         std::string hexStr = node.hash.toHex();
         _nodeHashes.push_back(hexStr);
-
         if (!prevSelected.empty() && hexStr == prevSelected) {
             newSelectedIdx = (int)_nodeHashes.size() - 1;
         }
     }
 
     if (!_nodeHashes.empty()) {
+        // Skip section headers when restoring selection
+        if (newSelectedIdx == 0 && _nodeHashes.size() > 1) newSelectedIdx = 1;
         _list.setSelected(newSelectedIdx);
     }
 
@@ -99,25 +143,36 @@ void NodesScreen::refreshList() {
 
 void NodesScreen::showActionMenu(int nodeIdx) {
     if (!_announces || nodeIdx < 0 || nodeIdx >= (int)_nodeHashes.size()) return;
+    if (_nodeHashes[nodeIdx].empty()) return;  // Section header
 
     _selectedNodeIdx = nodeIdx;
     _selectedNodeHash = _nodeHashes[nodeIdx];
 
-    // Find node details
+    // Try to find live node — may have been evicted since list was built
     RNS::Bytes hash;
     hash.assignHex(_selectedNodeHash.c_str());
     const DiscoveredNode* node = _announces->findNode(hash);
-    if (!node) return;
 
-    _selectedNodeName = node->name;
-    _selectedNodeSaved = node->saved;
+    if (node) {
+        _selectedNodeName = node->name;
+        _selectedNodeSaved = node->saved;
+    } else {
+        // Node was evicted — use name from the list item text, mark as not saved
+        _selectedNodeName = _selectedNodeHash.substr(0, 12);
+        // Try name cache as fallback
+        std::string cached = _announces->lookupName(_selectedNodeHash);
+        if (!cached.empty()) _selectedNodeName = cached;
+        _selectedNodeSaved = false;
+    }
 
     _actionList.clear();
     _actionList.addItem("Message");
-    if (_selectedNodeSaved) {
-        _actionList.addItem("Remove Contact");
-    } else {
-        _actionList.addItem("Save Contact");
+    if (node) {
+        if (_selectedNodeSaved) {
+            _actionList.addItem("Remove Contact");
+        } else {
+            _actionList.addItem("Save Contact");
+        }
     }
     _actionList.addItem("Back");
     _actionList.setSelected(0);
@@ -131,7 +186,6 @@ void NodesScreen::executeAction(int actionIdx) {
     if (action == "Message") {
         exitActionMenu();
         if (_selectCb) {
-            Serial.printf("[NODES] Selected: %s\n", _selectedNodeHash.c_str());
             _selectCb(_selectedNodeHash);
         }
     } else if (action == "Save Contact") {
@@ -153,7 +207,6 @@ void NodesScreen::exitActionMenu() {
 }
 
 void NodesScreen::render(M5Canvas& canvas) {
-    // Auto-refresh every 30 seconds if node count changed (skip while action menu open)
     if (!_showingActions && millis() - _lastRefresh > 30000) {
         int delta = abs(_announces->nodeCount() - _lastKnownCount);
         if (delta > 0) refreshList();
@@ -162,30 +215,28 @@ void NodesScreen::render(M5Canvas& canvas) {
     int y = Theme::CONTENT_Y;
 
     if (_showingActions) {
-        // Action menu header
         canvas.setTextSize(Theme::FONT_SIZE);
         canvas.setTextColor(Theme::PRIMARY);
         canvas.setCursor(4, y + 2);
-        // Truncate to screen width (~26 chars at default font)
-        std::string truncName;
         {
-            size_t chars = 0;
-            size_t i = 0;
+            char truncName[80];
+            size_t chars = 0, i = 0;
             const uint8_t* p = (const uint8_t*)_selectedNodeName.data();
             size_t sz = _selectedNodeName.size();
-            while (i < sz && chars < 26) {
+            while (i < sz && chars < 26 && i < sizeof(truncName) - 1) {
                 uint8_t c = p[i];
                 size_t seqLen = 1;
                 if ((c & 0xE0) == 0xC0) seqLen = 2;
                 else if ((c & 0xF0) == 0xE0) seqLen = 3;
                 else if ((c & 0xF8) == 0xF0) seqLen = 4;
-                if (i + seqLen > sz) break;
+                if (i + seqLen > sz || i + seqLen > sizeof(truncName) - 1) break;
                 i += seqLen;
                 chars++;
             }
-            truncName = _selectedNodeName.substr(0, i);
+            memcpy(truncName, _selectedNodeName.data(), i);
+            truncName[i] = '\0';
+            canvas.print(truncName);
         }
-        canvas.print(truncName.c_str());
         y += Theme::CHAR_H + 4;
         canvas.drawFastHLine(0, y, Theme::SCREEN_W, Theme::BORDER);
         y += 2;
@@ -193,38 +244,26 @@ void NodesScreen::render(M5Canvas& canvas) {
         _actionList.render(canvas, 0, y, Theme::SCREEN_W, Theme::CONTENT_H - (y - Theme::CONTENT_Y));
     } else {
         // Header
+        canvas.fillRect(0, y, Theme::CONTENT_W, 11, Theme::BAR_BG);
+        canvas.fillRect(0, y, 2, 11, Theme::ACCENT);
         canvas.setTextSize(Theme::FONT_SIZE);
-        canvas.setTextColor(Theme::PRIMARY);
-        canvas.setCursor(4, y + 2);
-        if (_contactsView) {
-            canvas.printf("Contacts (%d)", (int)_nodeHashes.size());
+        canvas.setTextColor(Theme::ACCENT);
+        canvas.setCursor(6, y + 2);
+        if (_contactCount > 0) {
+            canvas.printf("CONTACTS (%d)", _contactCount);
         } else {
-            canvas.printf("Nodes (%d)", _announces ? _announces->nodeCount() : 0);
+            canvas.printf("PEERS (%d)", _announces ? _announces->nodeCount() : 0);
         }
 
-        // Bottom hint for toggle
-        canvas.setTextColor(Theme::MUTED);
-        const char* hint = _contactsView ? "[c] All Nodes" : "[c] Contacts";
-        int hintW = strlen(hint) * Theme::CHAR_W;
-        canvas.setCursor(Theme::SCREEN_W - hintW - 4, y + 2);
-        canvas.print(hint);
-
-        y += Theme::CHAR_H + 4;
-        canvas.drawFastHLine(0, y, Theme::SCREEN_W, Theme::BORDER);
-        y += 2;
+        canvas.drawFastHLine(0, y + 11, Theme::SCREEN_W, Theme::BORDER);
+        y += 13;
 
         if (_list.itemCount() == 0) {
             canvas.setTextColor(Theme::MUTED);
             canvas.setCursor(4, y + 10);
-            if (_contactsView) {
-                canvas.print("No saved contacts.");
-                canvas.setCursor(4, y + 22);
-                canvas.print("Select a node and Save.");
-            } else {
-                canvas.print("No nodes discovered yet.");
-                canvas.setCursor(4, y + 22);
-                canvas.print("Waiting for announces...");
-            }
+            canvas.print("No nodes discovered yet.");
+            canvas.setCursor(4, y + 22);
+            canvas.print("Waiting for announces...");
         } else {
             _list.render(canvas, 0, y, Theme::SCREEN_W, Theme::CONTENT_H - (y - Theme::CONTENT_Y));
         }
@@ -233,8 +272,8 @@ void NodesScreen::render(M5Canvas& canvas) {
 
 bool NodesScreen::handleKey(const KeyEvent& event) {
     if (_showingActions) {
-        // ESC exits action menu
-        if (event.character == 27) {
+        // ESC or Delete exits action menu
+        if (event.character == 27 || event.del) {
             exitActionMenu();
             return true;
         }
@@ -250,30 +289,32 @@ bool NodesScreen::handleKey(const KeyEvent& event) {
             executeAction(_actionList.getSelectedIndex());
             return true;
         }
-        return true;  // Consume all keys while action menu is open
+        return true;
     }
 
-    // Normal list navigation
-    // ; = up arrow, . = down arrow on Cardputer Adv keyboard
+    // Navigation
     if (event.character == ';') {
         _list.scrollUp();
+        // Skip section headers
+        int idx = _list.getSelectedIndex();
+        if (idx >= 0 && idx < (int)_nodeHashes.size() && _nodeHashes[idx].empty()) {
+            _list.scrollUp();
+        }
         return true;
     }
     if (event.character == '.') {
         _list.scrollDown();
+        int idx = _list.getSelectedIndex();
+        if (idx >= 0 && idx < (int)_nodeHashes.size() && _nodeHashes[idx].empty()) {
+            _list.scrollDown();
+        }
         return true;
     }
     if (event.enter) {
         int idx = _list.getSelectedIndex();
-        if (idx >= 0 && idx < (int)_nodeHashes.size()) {
+        if (idx >= 0 && idx < (int)_nodeHashes.size() && !_nodeHashes[idx].empty()) {
             showActionMenu(idx);
         }
-        return true;
-    }
-    // 'c' toggles contacts view
-    if (event.character == 'c' || event.character == 'C') {
-        _contactsView = !_contactsView;
-        refreshList();
         return true;
     }
     return false;

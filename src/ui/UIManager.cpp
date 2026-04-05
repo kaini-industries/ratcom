@@ -1,8 +1,24 @@
 #include "UIManager.h"
 
 void UIManager::begin() {
+    // 8-bit palette mode: 240×135×1 = 32,400 bytes (vs 64,800 at 16-bit)
+    // Saves 32KB heap — critical on this no-PSRAM device
+    _canvas.setColorDepth(8);
     _canvas.createSprite(Theme::SCREEN_W, Theme::SCREEN_H);
-    _canvas.setColorDepth(16);
+    // Register theme colors in palette — M5GFX auto-matches when drawing
+    _canvas.setPaletteColor(0, Theme::BG);
+    _canvas.setPaletteColor(1, Theme::PRIMARY);
+    _canvas.setPaletteColor(2, Theme::SECONDARY);
+    _canvas.setPaletteColor(3, Theme::MUTED);
+    _canvas.setPaletteColor(4, Theme::ERROR);
+    _canvas.setPaletteColor(5, Theme::WARNING);
+    _canvas.setPaletteColor(6, Theme::ACCENT);
+    _canvas.setPaletteColor(7, Theme::BORDER);
+    _canvas.setPaletteColor(8, Theme::SELECTION_BG);
+    _canvas.setPaletteColor(9, Theme::BAR_BG);
+    _canvas.setPaletteColor(10, Theme::BADGE_BG);
+    _canvas.setPaletteColor(11, Theme::BADGE_TEXT);
+    Serial.printf("[UI] Canvas: 8-bit palette, %d bytes\n", Theme::SCREEN_W * Theme::SCREEN_H);
     _canvas.fillScreen(Theme::BG);
     _needsRender = true;
     _statusDirty = true;

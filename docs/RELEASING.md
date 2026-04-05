@@ -3,9 +3,9 @@
 ## Pre-Release Checklist
 
 1. All changes committed and pushed to `main`
-2. Local build succeeds: `pio run -e ratputer_915`
+2. Local build succeeds: `pio run -e ratcom_915`
 3. Flash and test on device — confirm boot completes and basic functionality works
-4. Version bumped in `src/config/Config.h` (all 4 defines: `RATPUTER_VERSION_MAJOR`, `RATPUTER_VERSION_MINOR`, `RATPUTER_VERSION_PATCH`, `RATPUTER_VERSION_STRING`)
+4. Version bumped in `src/config/Config.h` (all 4 defines: `RATCOM_VERSION_MAJOR`, `RATCOM_VERSION_MINOR`, `RATCOM_VERSION_PATCH`, `RATCOM_VERSION_STRING`)
 
 ## Release Steps
 
@@ -48,8 +48,8 @@ For critical bugs in a released version:
 
 | Parameter | Value |
 |-----------|-------|
-| PlatformIO env | `ratputer_915` |
-| Version defines | `RATPUTER_VERSION_MAJOR/MINOR/PATCH/STRING` |
+| PlatformIO env | `ratcom_915` |
+| Version defines | `RATCOM_VERSION_MAJOR/MINOR/PATCH/STRING` |
 | Firmware artifact | `ratcom-firmware.zip` |
 | Flash size | 8MB |
 | Flash mode | dio |

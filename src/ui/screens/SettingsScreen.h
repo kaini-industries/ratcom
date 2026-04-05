@@ -97,4 +97,8 @@ private:
     // Toast overlay
     unsigned long _toastUntil = 0;
     const char* _toastMessage = nullptr;
+
+    // Confirmation dialog state
+    bool _confirmPending = false;
+    int _confirmAction = 0;  // 0=factory reset, 1=SD wipe
 };

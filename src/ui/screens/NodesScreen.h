@@ -46,9 +46,7 @@ private:
     std::string _selectedNodeHash;
     bool _selectedNodeSaved = false;
 
-    // Contacts view toggle
-    bool _contactsView = false;
-
-    // Delta gating for refresh
+    // Section tracking
+    int _contactCount = 0;
     int _lastKnownCount = 0;
 };

@@ -13,13 +13,14 @@ bool WriteQueue::begin(SDStore* sd, FlashStore* flash) {
         return false;
     }
 
-    xTaskCreatePinnedToCore(taskFunc, "WriteQ", TASK_STACK, this, TASK_PRIORITY, &_task, 0);
+    // Pin to Core 1 (same as main loop) — LittleFS is NOT thread-safe across cores
+    xTaskCreatePinnedToCore(taskFunc, "WriteQ", TASK_STACK, this, TASK_PRIORITY, &_task, 1);
     if (!_task) {
         Serial.println("[WRITEQ] Failed to create task");
         return false;
     }
 
-    Serial.println("[WRITEQ] Async write queue started on Core 0");
+    Serial.println("[WRITEQ] Async write queue started on Core 1");
     return true;
 }
 
@@ -124,7 +125,7 @@ void WriteQueue::processJob(const WriteJob& job) {
 void WriteQueue::periodicMaintenance() {
     // Persist receive counter to NVS (batched, not per-message)
     if (_counterRef) {
-        uint32_t current = *_counterRef;
+        uint32_t current = _counterRef->load(std::memory_order_relaxed);
         if (current != _lastPersistedCounter) {
             Preferences prefs;
             if (prefs.begin("ratcom", false)) {

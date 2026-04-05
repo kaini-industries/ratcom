@@ -25,10 +25,8 @@ void TabBar::setUnreadCount(int tab, int count) {
 void TabBar::render(M5Canvas& canvas) {
     int y = Theme::SCREEN_H - Theme::TAB_BAR_H;
 
-    // Background
-    canvas.fillRect(0, y, Theme::SCREEN_W, Theme::TAB_BAR_H, Theme::BG);
-
-    // Top divider
+    // Dark panel background
+    canvas.fillRect(0, y, Theme::SCREEN_W, Theme::TAB_BAR_H, Theme::BAR_BG);
     canvas.drawFastHLine(0, y, Theme::SCREEN_W, Theme::BORDER);
 
     canvas.setTextSize(Theme::FONT_SIZE);
@@ -37,13 +35,21 @@ void TabBar::render(M5Canvas& canvas) {
         int tx = i * Theme::TAB_W;
         bool active = (i == _activeTab);
 
-        // Active tab underline
+        int labelLen = strlen(TAB_LABELS[i]) * Theme::CHAR_W;
+        int labelX = tx + (Theme::TAB_W - labelLen) / 2;
+        int labelY = y + (Theme::TAB_BAR_H - Theme::CHAR_H) / 2;
+
+        // Active tab: filled rounded pill behind text
         if (active) {
-            canvas.drawFastHLine(tx + 2, y + Theme::TAB_BAR_H - 2,
-                                 Theme::TAB_W - 4, Theme::PRIMARY);
+            int pillW = labelLen + 8;
+            int pillX = labelX - 4;
+            int pillY = labelY - 3;
+            int pillH = Theme::CHAR_H + 5;
+            canvas.fillRoundRect(pillX, pillY, pillW, pillH, 3, Theme::SELECTION_BG);
+            canvas.drawRoundRect(pillX, pillY, pillW, pillH, 3, Theme::PRIMARY);
         }
 
-        // Label — blink Msgs tab when unread
+        // Label color — blink Msgs tab when unread
         uint16_t labelColor;
         if (active) {
             labelColor = Theme::TAB_ACTIVE;
@@ -54,22 +60,19 @@ void TabBar::render(M5Canvas& canvas) {
             labelColor = Theme::TAB_INACTIVE;
         }
         canvas.setTextColor(labelColor);
-        int labelLen = strlen(TAB_LABELS[i]) * Theme::CHAR_W;
-        int labelX = tx + (Theme::TAB_W - labelLen) / 2;
-        int labelY = y + (Theme::TAB_BAR_H - Theme::CHAR_H) / 2;
         canvas.setCursor(labelX, labelY);
         canvas.print(TAB_LABELS[i]);
 
-        // Unread badge
+        // Unread badge (small pill)
         if (_unreadCounts[i] > 0) {
             char badge[8];
             snprintf(badge, sizeof(badge), "%d", _unreadCounts[i]);
-            int badgeW = strlen(badge) * Theme::CHAR_W + 4;
-            int badgeX = labelX + labelLen + 1;
+            int badgeW = strlen(badge) * Theme::CHAR_W + 6;
+            int badgeX = labelX + labelLen + 2;
             int badgeY = labelY - 1;
-            canvas.fillRoundRect(badgeX, badgeY, badgeW, Theme::CHAR_H + 2, 2, Theme::BADGE_BG);
+            canvas.fillRoundRect(badgeX, badgeY, badgeW, Theme::CHAR_H + 2, 3, Theme::BADGE_BG);
             canvas.setTextColor(Theme::BADGE_TEXT);
-            canvas.setCursor(badgeX + 2, badgeY + 1);
+            canvas.setCursor(badgeX + 3, badgeY + 1);
             canvas.print(badge);
         }
     }

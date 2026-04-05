@@ -65,7 +65,7 @@ void DataCleanScreen::render(M5Canvas& canvas) {
 
     // Version
     canvas.setTextColor(Theme::BORDER);
-    const char* ver = "v" RATPUTER_VERSION_STRING;
+    const char* ver = "v" RATCOM_VERSION_STRING;
     int vw = strlen(ver) * Theme::CHAR_W;
     canvas.setCursor(cx - vw / 2, Theme::CONTENT_Y + Theme::CONTENT_H - 12);
     canvas.print(ver);

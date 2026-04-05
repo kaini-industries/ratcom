@@ -37,16 +37,10 @@ void Keyboard::update() {
         _event.character = 27;
     }
 
-    // Handle double-tap Aa for caps lock
-    if (_event.shift && !_event.ctrl && _event.character == 0 &&
-        !_event.enter && !_event.del && !_event.tab && !_event.space) {
-        unsigned long now = millis();
-        if (now - _lastCapsToggle < 500) {
-            M5Cardputer.Keyboard.setCapsLocked(!M5Cardputer.Keyboard.capslocked());
-            _lastCapsToggle = 0;
-        } else {
-            _lastCapsToggle = now;
-        }
+    // Aa key is momentary shift only — no caps lock toggle.
+    // Ensure caps lock is always off (prevent accidental latching).
+    if (M5Cardputer.Keyboard.capslocked()) {
+        M5Cardputer.Keyboard.setCapsLocked(false);
     }
 
     _hasEvent = true;

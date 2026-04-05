@@ -1,12 +1,38 @@
 #include "UserConfig.h"
 #include "config/BoardConfig.h"
+#include <Preferences.h>
+
+// NVS namespace and key for full config backup
+static constexpr const char* NVS_NS   = "ratcom_cfg";
+static constexpr const char* NVS_KEY  = "json";
+
+// ---------------------------------------------------------------------------
+// NVS helpers — bulletproof config storage (internal flash, no SPI bus)
+// ---------------------------------------------------------------------------
+
+static bool saveToNVS(const String& json) {
+    Preferences prefs;
+    if (!prefs.begin(NVS_NS, false)) return false;
+    bool ok = prefs.putString(NVS_KEY, json) > 0;
+    prefs.end();
+    if (ok) Serial.println("[CONFIG] Saved to NVS");
+    return ok;
+}
+
+static String loadFromNVS() {
+    Preferences prefs;
+    if (!prefs.begin(NVS_NS, true)) return "";
+    String json = prefs.getString(NVS_KEY, "");
+    prefs.end();
+    return json;
+}
 
 // ---------------------------------------------------------------------------
 // JSON serialization helpers
 // ---------------------------------------------------------------------------
 
 bool UserConfig::parseJson(const String& json) {
-    Serial.printf("[CONFIG] Raw JSON (%d bytes): %s\n", json.length(), json.c_str());
+    Serial.printf("[CONFIG] Parsing config (%d bytes)\n", json.length());
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
@@ -56,9 +82,16 @@ bool UserConfig::parseJson(const String& json) {
     _settings.audioVolume  = doc["audio_vol"] | 80;
 
     _settings.utcOffset   = doc["utc_offset"]    | -5;
+    _settings.timezoneIdx = doc["tz_idx"]       | 6;
+    _settings.timezoneSet = doc["tz_set"]       | false;
+    _settings.gpsTimeEnabled = doc["gps_time"] | true;
+    _settings.gpsLocationEnabled = doc["gps_loc"] | false;
     _settings.displayName = doc["display_name"] | "";
 
-    Serial.println("[CONFIG] Settings loaded");
+    Serial.printf("[CONFIG] Loaded: wifi_mode=%d ssid='%s' name='%s'\n",
+                  (int)_settings.wifiMode,
+                  _settings.wifiSTASSID.c_str(),
+                  _settings.displayName.c_str());
     return true;
 }
 
@@ -94,6 +127,10 @@ String UserConfig::serializeToJson() const {
     doc["audio_vol"] = _settings.audioVolume;
 
     doc["utc_offset"]   = _settings.utcOffset;
+    doc["tz_idx"]       = _settings.timezoneIdx;
+    doc["tz_set"]       = _settings.timezoneSet;
+    doc["gps_time"]     = _settings.gpsTimeEnabled;
+    doc["gps_loc"]      = _settings.gpsLocationEnabled;
     doc["display_name"] = _settings.displayName;
 
     String json;
@@ -106,56 +143,84 @@ String UserConfig::serializeToJson() const {
 // ---------------------------------------------------------------------------
 
 bool UserConfig::load(FlashStore& flash) {
+    // Try flash file
     String json = flash.readString(PATH_USER_CONFIG);
-    if (json.isEmpty()) {
-        Serial.println("[CONFIG] No saved config, using defaults");
-        return false;
+    if (!json.isEmpty() && parseJson(json)) return true;
+
+    // Fall back to NVS
+    json = loadFromNVS();
+    if (!json.isEmpty()) {
+        Serial.println("[CONFIG] Recovered from NVS (flash file missing)");
+        return parseJson(json);
     }
-    return parseJson(json);
+
+    Serial.println("[CONFIG] No saved config anywhere, using defaults");
+    return false;
 }
 
 bool UserConfig::save(FlashStore& flash) {
     String json = serializeToJson();
-    bool ok = flash.writeString(PATH_USER_CONFIG, json);
-    if (ok) Serial.println("[CONFIG] Settings saved to flash");
+    bool ok = false;
+
+    if (flash.writeString(PATH_USER_CONFIG, json)) {
+        Serial.println("[CONFIG] Saved to flash");
+        ok = true;
+    }
+
+    // Always save full config to NVS — bulletproof backup
+    saveToNVS(json);
+
     return ok;
 }
 
 // ---------------------------------------------------------------------------
-// Dual-backend: SD primary, flash fallback
+// Dual-backend: SD primary, flash fallback, NVS bulletproof
 // ---------------------------------------------------------------------------
 
 bool UserConfig::load(SDStore& sd, FlashStore& flash) {
-    // Try SD card first
+    // Tier 1: SD card
     if (sd.isReady()) {
         String json = sd.readString(SD_PATH_USER_CONFIG);
         if (!json.isEmpty()) {
             Serial.println("[CONFIG] Loading from SD card");
-            return parseJson(json);
+            if (parseJson(json)) return true;
         }
     }
 
-    // Fall back to flash
-    String json = flash.readString(PATH_USER_CONFIG);
-    if (json.isEmpty()) {
-        Serial.println("[CONFIG] No saved config, using defaults");
-        return false;
-    }
-
-    bool ok = parseJson(json);
-
-    // Auto-migrate: flash had config but SD didn't — copy to SD
-    if (ok && sd.isReady()) {
-        Serial.println("[CONFIG] Migrating config from flash to SD...");
-        sd.ensureDir("/ratcom");
-        sd.ensureDir("/ratcom/config");
-        String migrateJson = serializeToJson();
-        if (sd.writeString(SD_PATH_USER_CONFIG, migrateJson)) {
-            Serial.println("[CONFIG] Migration complete");
+    // Tier 2: Flash (LittleFS)
+    {
+        String json = flash.readString(PATH_USER_CONFIG);
+        if (!json.isEmpty()) {
+            Serial.println("[CONFIG] Loading from flash");
+            if (parseJson(json)) {
+                // Auto-migrate to SD if available
+                if (sd.isReady()) {
+                    sd.ensureDir("/ratcom");
+                    sd.ensureDir("/ratcom/config");
+                    String migrateJson = serializeToJson();
+                    sd.writeString(SD_PATH_USER_CONFIG, migrateJson);
+                    Serial.println("[CONFIG] Migrated to SD");
+                }
+                return true;
+            }
         }
     }
 
-    return ok;
+    // Tier 3: NVS (bulletproof — survives flash corruption)
+    {
+        String json = loadFromNVS();
+        if (!json.isEmpty()) {
+            Serial.println("[CONFIG] Recovered full config from NVS");
+            if (parseJson(json)) {
+                // Re-save to SD/flash to heal the corruption
+                save(sd, flash);
+                return true;
+            }
+        }
+    }
+
+    Serial.println("[CONFIG] No saved config anywhere, using defaults");
+    return false;
 }
 
 bool UserConfig::save(SDStore& sd, FlashStore& flash) {
@@ -179,6 +244,10 @@ bool UserConfig::save(SDStore& sd, FlashStore& flash) {
         Serial.println("[CONFIG] Saved to flash");
         ok = true;
     }
+
+    // Always save full config to NVS — bulletproof backup
+    // NVS is on internal flash, no SPI bus, wear-leveled, checksum-protected
+    if (saveToNVS(json)) ok = true;
 
     return ok;
 }

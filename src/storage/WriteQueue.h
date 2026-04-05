@@ -4,6 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <atomic>
 
 class SDStore;
 class FlashStore;
@@ -32,7 +33,7 @@ public:
     bool isFull() const;
 
     // Set a counter value to be periodically persisted to NVS
-    void setCounterRef(volatile uint32_t* counter) { _counterRef = counter; }
+    void setCounterRef(std::atomic<uint32_t>* counter) { _counterRef = counter; }
 
 private:
     static void taskFunc(void* param);
@@ -45,10 +46,10 @@ private:
     FlashStore* _flash = nullptr;
     volatile int _pending = 0;
     unsigned long _lastMaintenance = 0;
-    volatile uint32_t* _counterRef = nullptr;
+    std::atomic<uint32_t>* _counterRef = nullptr;
     uint32_t _lastPersistedCounter = 0;
 
-    static constexpr int QUEUE_DEPTH = 16;
+    static constexpr int QUEUE_DEPTH = 32;
     static constexpr int TASK_STACK = 8192;
     static constexpr int TASK_PRIORITY = 1;
     static constexpr unsigned long MAINTENANCE_INTERVAL = 30000; // 30s

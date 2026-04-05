@@ -46,6 +46,12 @@ struct UserSettings {
 
     // Time
     int8_t utcOffset = -5;  // Hours from UTC (default EST)
+    uint8_t timezoneIdx = 6; // Index into TIMEZONE_TABLE (default: New York)
+    bool timezoneSet = false; // false = show timezone picker at boot
+
+    // GPS
+    bool gpsTimeEnabled = true;      // Sync system clock from GPS
+    bool gpsLocationEnabled = false; // Track position (user must opt in)
 
     // Identity
     String displayName;

@@ -43,6 +43,9 @@ public:
     // Mark conversation as read
     void markRead(const std::string& peerHex);
 
+    // Delete a conversation and its messages
+    void deleteConversation(const std::string& peerHex);
+
 private:
     bool sendDirect(LXMFMessage& msg);
     void processIncoming(const uint8_t* data, size_t len, const RNS::Bytes& destHash);

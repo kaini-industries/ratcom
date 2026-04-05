@@ -1,6 +1,12 @@
 #include "TCPClientInterface.h"
 #include "config/Config.h"
 
+// Shared buffers — allocated once, used by all TCP connections sequentially
+uint8_t* TCPClientInterface::_rxBuffer = nullptr;
+uint8_t* TCPClientInterface::_txBuffer = nullptr;
+uint8_t* TCPClientInterface::_wrapBuffer = nullptr;
+bool TCPClientInterface::_buffersAllocated = false;
+
 TCPClientInterface::TCPClientInterface(const char* host, uint16_t port, const char* name)
     : RNS::InterfaceImpl(name), _host(host), _port(port)
 {
@@ -8,19 +14,22 @@ TCPClientInterface::TCPClientInterface(const char* host, uint16_t port, const ch
     _OUT = true;
     _bitrate = 1000000;
     _HW_MTU = 500;
-    _rxBuffer = (uint8_t*)malloc(RX_BUFFER_SIZE);
-    _txBuffer = (uint8_t*)malloc(TX_BUFFER_SIZE);
-    _wrapBuffer = (uint8_t*)malloc(RX_BUFFER_SIZE);
-    if (!_rxBuffer || !_txBuffer || !_wrapBuffer) {
-        Serial.println("[TCP] FATAL: buffer allocation failed");
+    // Allocate shared buffers once — all TCP connections share them
+    if (!_buffersAllocated) {
+        _rxBuffer = (uint8_t*)malloc(RX_BUFFER_SIZE);
+        _txBuffer = (uint8_t*)malloc(TX_BUFFER_SIZE);
+        _wrapBuffer = (uint8_t*)malloc(RX_BUFFER_SIZE);
+        if (!_rxBuffer || !_txBuffer || !_wrapBuffer) {
+            Serial.println("[TCP] FATAL: buffer allocation failed — interface disabled");
+            _online = false;
+        }
+        _buffersAllocated = true;
     }
 }
 
 TCPClientInterface::~TCPClientInterface() {
     stop();
-    if (_rxBuffer) { free(_rxBuffer); _rxBuffer = nullptr; }
-    if (_txBuffer) { free(_txBuffer); _txBuffer = nullptr; }
-    if (_wrapBuffer) { free(_wrapBuffer); _wrapBuffer = nullptr; }
+    // Don't free shared buffers — they persist for the lifetime of the device
 }
 
 bool TCPClientInterface::start() {
@@ -39,6 +48,10 @@ void TCPClientInterface::stop() {
 
 void TCPClientInterface::tryConnect() {
     _lastAttempt = millis();
+    // Close any stale/half-open socket before new connection attempt
+    if (_client.connected() || _client) {
+        _client.stop();
+    }
     Serial.printf("[TCP] Connecting to %s:%d...\n", _host.c_str(), _port);
 
     if (_client.connect(_host.c_str(), _port, TCP_CONNECT_TIMEOUT_MS)) {
@@ -49,24 +62,29 @@ void TCPClientInterface::tryConnect() {
         _hubTransportIdKnown = false;
         _pendingAnnounces.clear();
         _lastRxTime = millis();
+        _reconnectBackoff = 1000;  // Reset backoff on success
 
         // Set TCP write timeout to prevent blocking on half-open sockets
-        _client.setTimeout(5);  // 5 second write timeout
+        _client.setTimeout(5);  // 5ms write timeout
         _client.setNoDelay(true);  // Disable Nagle — send immediately
 
         Serial.printf("[TCP] Connected to %s:%d\n", _host.c_str(), _port);
     } else {
-        Serial.printf("[TCP] Failed to connect to %s:%d\n", _host.c_str(), _port);
+        // Exponential backoff: 1s → 2s → 4s → ... → 5min max, with jitter
+        _reconnectBackoff = std::min(_reconnectBackoff * 2, (unsigned long)300000);
+        _reconnectBackoff += random(_reconnectBackoff / 5);  // +0-20% jitter
+        Serial.printf("[TCP] Failed to connect to %s:%d (next retry in %lus)\n",
+                      _host.c_str(), _port, _reconnectBackoff / 1000);
     }
 }
 
 void TCPClientInterface::loop() {
     if (!_online) return;
 
-    // Auto-reconnect (only if WiFi is connected)
+    // Auto-reconnect with exponential backoff (only if WiFi is connected)
     if (!_client.connected()) {
         if (WiFi.status() != WL_CONNECTED) return;
-        if (millis() - _lastAttempt >= TCP_RECONNECT_INTERVAL_MS) {
+        if (millis() - _lastAttempt >= _reconnectBackoff) {
             tryConnect();
         }
         return;
@@ -140,16 +158,6 @@ void TCPClientInterface::send_outgoing(const RNS::Bytes& data) {
         uint8_t flags = data.data()[0];
         uint8_t header_type = (flags >> 6) & 0x01;
         uint8_t packet_type = flags & 0x03;
-
-        // Diagnostic: identify packet types going through TCP
-        static const char* pt_names[] = {"DATA", "ANNOUNCE", "LINKREQ", "PROOF"};
-        Serial.printf("[TCP-DIAG] send: %d bytes ht=%d pt=%s(%d) to %s:%d\n",
-            (int)data.size(), header_type,
-            (packet_type < 4) ? pt_names[packet_type] : "?", packet_type,
-            _host.c_str(), _port);
-        if (packet_type == 0x03) {
-            Serial.printf("[TCP-DIAG] *** PROOF packet being sent via TCP! ***\n");
-        }
 
         if (packet_type != 0x01) {  // Not ANNOUNCE
             if (header_type == 0) {

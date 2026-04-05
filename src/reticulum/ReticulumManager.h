@@ -81,7 +81,7 @@ private:
     bool _transportActive = false;
     unsigned long _lastPersist = 0;
     unsigned long _lastAnnounceTime = 0;
-    uint8_t _persistCycle = 0;  // Rotating: 0=Transport, 1=Identity, 2=SD backup
+    uint8_t _persistCycle = 0;  // Rotating: 0=Transport, 1=Identity
 
     // Background persist task (core 0) — flash writes don't block main loop
     QueueHandle_t _persistQueue = nullptr;

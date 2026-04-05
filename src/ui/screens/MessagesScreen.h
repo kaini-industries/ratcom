@@ -21,16 +21,35 @@ public:
     using OpenConversationCb = std::function<void(const std::string& peerHex)>;
     void setOpenCallback(OpenConversationCb cb) { _openCb = cb; }
 
+    // Callback to add contact
+    using AddContactCb = std::function<void(const std::string& peerHex)>;
+    void setAddContactCallback(AddContactCb cb) { _addContactCb = cb; }
+
     void notifyNewMessage() { _needsRefresh = true; }
 
 private:
     void refreshList();
+    void showContextMenu(int idx);
+    void executeContextAction();
+    void exitContextMenu();
 
     LXMFManager* _lxmf = nullptr;
     AnnounceManager* _am = nullptr;
     ScrollList _list;
-    std::vector<std::string> _peerHexes;  // Parallel to list items
+    std::vector<std::string> _peerHexes;
     unsigned long _lastRefresh = 0;
     OpenConversationCb _openCb;
+    AddContactCb _addContactCb;
     bool _needsRefresh = false;
+
+    // Long-press detection
+    unsigned long _enterPressTime = 0;
+    bool _enterHeld = false;
+    static constexpr unsigned long LONG_PRESS_MS = 500;
+
+    // Context menu
+    bool _showingContext = false;
+    ScrollList _contextList;
+    std::string _contextPeerHex;
+    bool _contextIsContact = false;
 };

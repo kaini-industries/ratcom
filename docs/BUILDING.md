@@ -14,10 +14,10 @@ No USB drivers needed on macOS or Linux — the ESP32-S3's USB-Serial/JTAG inter
 ## Build
 
 ```bash
-python3 -m platformio run -e ratputer_915
+python3 -m platformio run -e ratcom_915
 ```
 
-Output binary: `.pio/build/ratputer_915/firmware.bin`
+Output binary: `.pio/build/ratcom_915/firmware.bin`
 
 First build downloads all dependencies automatically (M5Unified, M5GFX, M5Cardputer, microReticulum, Crypto, ArduinoJson).
 
@@ -26,7 +26,7 @@ First build downloads all dependencies automatically (M5Unified, M5GFX, M5Cardpu
 ### Via PlatformIO (simple)
 
 ```bash
-python3 -m platformio run -e ratputer_915 -t upload --upload-port /dev/cu.usbmodem*
+python3 -m platformio run -e ratcom_915 -t upload --upload-port /dev/cu.usbmodem*
 ```
 
 ### Via esptool (more reliable)
@@ -36,7 +36,7 @@ PlatformIO defaults to 921600 baud which sometimes fails. esptool at 460800 is m
 ```bash
 python3 -m esptool --chip esp32s3 --port /dev/cu.usbmodem* --baud 460800 \
     --before default-reset --after hard-reset \
-    write-flash -z 0x10000 .pio/build/ratputer_915/firmware.bin
+    write-flash -z 0x10000 .pio/build/ratcom_915/firmware.bin
 ```
 
 ### Creating a Merged Binary
@@ -48,9 +48,9 @@ python3 -m esptool --chip esp32s3 merge-bin \
     --output ratcom_merged.bin \
     --flash-mode dio --flash-size 8MB \
     0x0    ~/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32s3/bin/bootloader_dio_80m.bin \
-    0x8000 .pio/build/ratputer_915/partitions.bin \
+    0x8000 .pio/build/ratcom_915/partitions.bin \
     0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
-    0x10000 .pio/build/ratputer_915/firmware.bin
+    0x10000 .pio/build/ratcom_915/firmware.bin
 
 python3 -m esptool --chip esp32s3 --port /dev/cu.usbmodem* --baud 460800 \
     --before default-reset --after hard-reset \
@@ -87,7 +87,7 @@ From `platformio.ini`:
 | Flag | Purpose |
 |------|---------|
 | `-fexceptions` | Enable C++ exceptions (required by microReticulum) |
-| `-DRATPUTER=1` | Main feature flag — guards all RatCom-specific code |
+| `-DRATCOM=1` | Main feature flag — guards all RatCom-specific code |
 | `-DARDUINO_USB_CDC_ON_BOOT=1` | USB CDC serial on boot (USBMode=default) |
 | `-DARDUINO_USB_MODE=1` | USB mode 1 = USB-Serial/JTAG (not native CDC) |
 | `-DRNS_USE_FS` | microReticulum: use filesystem for persistence |

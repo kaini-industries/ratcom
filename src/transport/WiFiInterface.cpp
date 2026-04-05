@@ -173,13 +173,10 @@ int WiFiInterface::readFrame(WiFiClient& client, uint8_t* buffer, size_t maxLen)
     bool escaped = false;
     size_t pos = 0;
 
-    // Tight drain loop: wait up to 10ms for complete frame (AP clients are on LAN)
-    unsigned long deadline = millis() + 10;
+    // Non-blocking drain: read what's available now, reassemble on next call
     while (pos < maxLen) {
         if (!client.available()) {
-            if (millis() >= deadline) break;
-            delay(1);
-            continue;
+            break;  // Don't block — return and retry next loop iteration
         }
 
         uint8_t b = client.read();

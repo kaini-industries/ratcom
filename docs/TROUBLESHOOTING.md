@@ -47,8 +47,8 @@ After `pip install platformio`, the `pio` binary may not be in your shell's PATH
 **Fix**: Use `python3 -m platformio` instead of `pio`:
 
 ```bash
-python3 -m platformio run -e ratputer_915
-python3 -m platformio run -e ratputer_915 -t upload
+python3 -m platformio run -e ratcom_915
+python3 -m platformio run -e ratcom_915 -t upload
 python3 -m platformio device monitor -b 115200
 ```
 
@@ -60,7 +60,7 @@ PlatformIO defaults to 921600 baud for flashing, which sometimes fails with USB-
 
 ```bash
 python3 -m esptool --chip esp32s3 --port /dev/cu.usbmodem* --baud 460800 \
-    write-flash -z 0x10000 .pio/build/ratputer_915/firmware.bin
+    write-flash -z 0x10000 .pio/build/ratcom_915/firmware.bin
 ```
 
 ### esptool hyphenated flags
@@ -144,7 +144,7 @@ Press **Ctrl+R** to sample RSSI continuously for 5 seconds. Transmit from anothe
 
 ### Radio test packet
 
-Press **Ctrl+T** to send a test packet with a fixed header (0xA0) and payload `RATPUTER_TEST_1234567890`. Includes FIFO readback verification. Use this to confirm the TX path is working without involving Reticulum.
+Press **Ctrl+T** to send a test packet with a fixed header (0xA0) and payload `RATCOM_TEST_1234567890`. Includes FIFO readback verification. Use this to confirm the TX path is working without involving Reticulum.
 
 ---
 

@@ -30,7 +30,7 @@ To build from source:
 git clone https://github.com/ratspeak/ratcom
 cd ratcom
 pip install platformio
-python3 -m platformio run -e ratputer_915 -t upload
+python3 -m platformio run -e ratcom_915 -t upload
 ```
 
 > If upload fails at 921600 baud, use esptool directly at 460800 or lower. See [docs/BUILDING.md](docs/BUILDING.md) for details.

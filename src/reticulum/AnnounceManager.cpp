@@ -4,7 +4,7 @@
 #include "storage/FlashStore.h"
 #include "transport/LoRaInterface.h"
 #include <ArduinoJson.h>
-#include <LittleFS.h>
+// LittleFS access through FlashStore (mutex-protected)
 
 // Skip one MsgPack value at data[pos], return new pos (or len on error)
 static size_t mpSkipValue(const uint8_t* data, size_t len, size_t pos) {
@@ -223,61 +223,52 @@ void AnnounceManager::received_announce(
         if (++_globalAnnounceCount > MAX_GLOBAL_ANNOUNCES_PER_SEC) return;
     }
 
-    std::string key = makeKey(destination_hash);
-    std::string idHex = announced_identity ? announced_identity.hexhash() : "";
+    // Heap-pressure eviction: aggressively cull non-contacts before processing more
+    if (ESP.getFreeHeap() < 25000) {
+        evictStale(300000);  // 5 min TTL under pressure (normally 1 hour)
+    }
 
+    std::string key = makeKey(destination_hash);
     unsigned long now = millis();
+
     // O(1) lookup for existing node
     auto it = _hashIndex.find(key);
     if (it != _hashIndex.end()) {
         auto& node = _nodes[it->second];
         if (now - node.lastSeen < ANNOUNCE_MIN_INTERVAL_MS) return;
         if (!name.empty()) node.name = name;
-        if (!idHex.empty()) node.identityHex = idHex;
         node.lastSeen = now;
         if (_loraIf) { node.rssi = _loraIf->lastRxRssi(); node.snr = _loraIf->lastRxSnr(); }
         if (node.saved) {
+            // Contacts: full processing — update hops, persist, cache name
+            std::string idHex = announced_identity ? announced_identity.hexhash() : "";
+            if (!idHex.empty()) node.identityHex = idHex;
             node.hops = RNS::Transport::hops_to(destination_hash);
             _contactsDirty = true;
-        }
-        // Only compute toHex for name cache when name actually changed
-        if (!name.empty()) {
-            std::string destHex = destination_hash.toHex();
-            auto nc = _nameCache.find(destHex);
-            if (nc == _nameCache.end() || nc->second != name) {
-                if (nc == _nameCache.end() && (int)_nameCache.size() >= MAX_NAME_CACHE) {
-                    _nameCache.erase(_nameCache.begin());
-                }
+            if (!name.empty()) {
+                std::string destHex = destination_hash.toHex();
                 _nameCache[destHex] = name;
                 _nameCacheDirty = true;
             }
         }
+        // Non-contacts: name updated in RAM only — no disk writes, no name cache persist
         return;
     }
 
-    // New node — toHex needed for log + name cache
+    // New node — lightweight for non-contacts
     std::string destHex = destination_hash.toHex();
-    Serial.printf("[ANNOUNCE] New: %s name=\"%s\"\n", destHex.c_str(), name.c_str());
 
-    if (!name.empty()) {
-        auto nc = _nameCache.find(destHex);
-        if (nc == _nameCache.end() || nc->second != name) {
-            // Evict oldest entry if cache is full (prevent unbounded heap growth)
-            if (nc == _nameCache.end() && (int)_nameCache.size() >= MAX_NAME_CACHE) {
-                _nameCache.erase(_nameCache.begin());
-            }
-            _nameCache[destHex] = name;
-            _nameCacheDirty = true;
-        }
-    }
+    // Name cache: only persist for contacts (checked later if saved)
+    // Non-contacts get name in RAM via node.name — no _nameCache entry
 
-    // Add new node
+    // Make room if full — evict non-contacts first
     if ((int)_nodes.size() >= MAX_NODES) {
-        evictStale();
+        evictStale(600000);  // 10 min TTL for eviction
         if ((int)_nodes.size() >= MAX_NODES) {
+            // Find worst non-contact: highest hops, oldest
+            int evictIdx = -1;
             uint8_t maxHops = 0;
             unsigned long oldest = ULONG_MAX;
-            int evictIdx = -1;
             for (int i = 0; i < (int)_nodes.size(); i++) {
                 if (_nodes[i].saved) continue;
                 if (_nodes[i].hops > maxHops ||
@@ -288,7 +279,6 @@ void AnnounceManager::received_announce(
                 }
             }
             if (evictIdx >= 0) {
-                // Swap-and-pop for O(1) eviction
                 int lastIdx = (int)_nodes.size() - 1;
                 if (evictIdx != lastIdx) {
                     std::string swapKey = makeKey(_nodes[lastIdx].hash);
@@ -305,11 +295,11 @@ void AnnounceManager::received_announce(
     DiscoveredNode node;
     node.hash = destination_hash;
     node.name = name.empty() ? destHex.substr(0, 12) : name;
-    node.identityHex = idHex;
     node.lastSeen = millis();
     if (_loraIf) { node.rssi = _loraIf->lastRxRssi(); node.snr = _loraIf->lastRxSnr(); }
     _hashIndex[key] = (int)_nodes.size();
     _nodes.push_back(node);
+    // Skip identityHex for non-contacts (saves ~64 bytes per node)
 }
 
 const DiscoveredNode* AnnounceManager::findNode(const RNS::Bytes& hash) const {
@@ -367,6 +357,11 @@ void AnnounceManager::saveNode(const std::string& hexHash) {
         auto& node = _nodes[it->second];
         node.saved = true;
         saveContact(node);
+        // Always persist contact name to name cache
+        if (!node.name.empty()) {
+            _nameCache[hexHash] = node.name;
+            _nameCacheDirty = true;
+        }
         Serial.printf("[ANNOUNCE] Saved contact: %s\n", node.name.c_str());
     }
 }
@@ -547,7 +542,7 @@ void AnnounceManager::loadContacts() {
 
     // Load from flash (any contacts not already on SD)
     if (_flash && _flash->isReady()) {
-        File dir = LittleFS.open(PATH_CONTACTS);
+        File dir = _flash->openDir(PATH_CONTACTS);
         if (dir && dir.isDirectory()) {
             loadFromDir(dir, "Flash");
         } else {
@@ -559,9 +554,15 @@ void AnnounceManager::loadContacts() {
 }
 
 void AnnounceManager::saveContacts() {
+    if (ESP.getFreeHeap() < 20000) {
+        Serial.println("[ANNOUNCE] Contact save deferred (low heap)");
+        _contactsDirty = true;
+        return;
+    }
     for (const auto& node : _nodes) {
         if (node.saved) {
             saveContact(node);
+            yield();
         }
     }
     _contactsDirty = false;
@@ -592,6 +593,12 @@ std::string AnnounceManager::lookupName(const std::string& hexHash) const {
 }
 
 void AnnounceManager::saveNameCache() {
+    // Skip save when heap is low — the JsonDocument + String allocation is expensive
+    if (ESP.getFreeHeap() < 20000) {
+        Serial.println("[ANNOUNCE] Name cache save deferred (low heap)");
+        _nameCacheDirty = true;  // Retry later
+        return;
+    }
     JsonDocument doc;
     for (auto& kv : _nameCache) {
         doc[kv.first] = kv.second;

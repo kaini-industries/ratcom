@@ -15,10 +15,10 @@ pip install platformio
 # Clone and build
 git clone https://github.com/defidude/RatCom.git
 cd RatCom
-python3 -m platformio run -e ratputer_915
+python3 -m platformio run -e ratcom_915
 
 # Flash to device (use glob to match USB port)
-python3 -m platformio run -e ratputer_915 -t upload --upload-port /dev/cu.usbmodem*
+python3 -m platformio run -e ratcom_915 -t upload --upload-port /dev/cu.usbmodem*
 ```
 
 > **Note**: If `pio` is not on your PATH, use `python3 -m platformio` instead. See [BUILDING.md](BUILDING.md) for esptool flashing and merged binary instructions.

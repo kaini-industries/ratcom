@@ -32,9 +32,11 @@
 #include "ui/screens/NameInputScreen.h"
 #include "ui/screens/DataCleanScreen.h"
 #include "ui/screens/HelpOverlay.h"
+#include "ui/screens/TimezoneScreen.h"
 #include "power/PowerManager.h"
 #include "audio/AudioNotify.h"
 #include "transport/BLEStub.h"
+#include "hal/GPSManager.h"
 #include <Preferences.h>
 #include <list>
 #include <esp_system.h>
@@ -68,6 +70,9 @@ UserConfig userConfig;
 PowerManager power;
 AudioNotify audio;
 BLEStub ble;
+#if HAS_GPS
+GPSManager gps;
+#endif
 
 // --- Screens ---
 BootScreen bootScreen;
@@ -78,6 +83,7 @@ MessageView messageView;
 NameInputScreen nameInputScreen;
 DataCleanScreen dataCleanScreen;
 SettingsScreen settingsScreen;
+TimezoneScreen timezoneScreen;
 HelpOverlay helpOverlay;
 
 // Tab-screen mapping
@@ -115,8 +121,8 @@ unsigned long rnsInterval = RNS_INTERVAL_MS;
 // =============================================================================
 
 static void reloadTCPClients() {
-    // Stop and deregister existing clients
-    for (auto* tcp : tcpClients) tcp->stop();
+    // Stop, deregister, and free existing clients
+    for (auto* tcp : tcpClients) { tcp->stop(); delete tcp; }
     for (auto& iface : tcpIfaces) {
         RNS::Transport::deregister_interface(iface);
     }
@@ -131,6 +137,8 @@ static void reloadTCPClients() {
                 snprintf(name, sizeof(name), "TCP.%s", ep.host.c_str());
                 auto* tcp = new TCPClientInterface(ep.host.c_str(), ep.port, name);
                 tcpIfaces.emplace_back(tcp);
+                // MODE_GATEWAY = "this interface connects TO a gateway/hub"
+                // Required for path discovery through the hub (we are still an endpoint)
                 tcpIfaces.back().mode(RNS::Type::Interface::MODE_GATEWAY);
                 RNS::Transport::register_interface(tcpIfaces.back());
                 tcp->start();
@@ -177,7 +185,7 @@ void onHotkeyAnnounce() {
 void onHotkeyDiag() {
     Serial.println("=== DIAGNOSTIC DUMP ===");
     Serial.printf("Identity: %s\n", rns.identityHash().c_str());
-    Serial.printf("Transport: %s\n", rns.isTransportActive() ? "ACTIVE" : "OFFLINE");
+    Serial.printf("Node: %s (endpoint, no forwarding)\n", rns.isTransportActive() ? "ONLINE" : "OFFLINE");
     Serial.printf("Paths: %d  Links: %d\n", (int)rns.pathCount(), (int)rns.linkCount());
     Serial.printf("Radio: %s\n", radioOnline ? "ONLINE" : "OFFLINE");
     if (radioOnline) {
@@ -209,9 +217,7 @@ void onHotkeyDiag() {
         Serial.println("----------------------------");
     }
     Serial.printf("Free heap: %lu bytes\n", (unsigned long)ESP.getFreeHeap());
-    Serial.printf("Flash: %lu/%lu bytes\n",
-                  (unsigned long)LittleFS.usedBytes(),
-                  (unsigned long)LittleFS.totalBytes());
+    Serial.printf("Flash: used/total (see heartbeat for heap)\n");
     Serial.printf("WriteQ pending: %d\n", messageStore.writeQueue().drainCount());
     Serial.printf("Uptime: %lu s\n", millis() / 1000);
     Serial.println("=======================");
@@ -246,7 +252,7 @@ void onHotkeyRssiMonitor() {
 void onHotkeyRadioTest() {
     Serial.println("[TEST] Sending raw radio test packet...");
     uint8_t header = 0xA0;
-    const char* testPayload = "RATPUTER_TEST_1234567890";
+    const char* testPayload = "RATCOM_TEST_1234567890";
     size_t totalLen = 1 + strlen(testPayload);
 
     radio.beginPacket();
@@ -304,7 +310,7 @@ void setup() {
 
     Serial.println();
     Serial.println("=================================");
-    Serial.printf("  RatCom v%s\n", RATPUTER_VERSION_STRING);
+    Serial.printf("  RatCom v%s\n", RATCOM_VERSION_STRING);
     Serial.println("  M5Stack Cardputer Adv");
     Serial.println("=================================");
 
@@ -508,7 +514,6 @@ void setup() {
                 userConfig.settings().wifiAPPassword.c_str());
         }
         wifiIface = wifiImpl;
-        wifiIface.mode(RNS::Type::Interface::MODE_GATEWAY);
         RNS::Transport::register_interface(wifiIface);
         wifiImpl->start();
 
@@ -534,6 +539,25 @@ void setup() {
 
     // BLE disabled
     Serial.println("[BLE] Disabled (stub — v1.1)");
+
+    // Initialize GPS (Cap LoRa-1262 GNSS module)
+#if HAS_GPS
+    if (userConfig.settings().gpsTimeEnabled || userConfig.settings().gpsLocationEnabled) {
+        // Use POSIX TZ from timezone table if set, otherwise simple UTC offset
+        if (userConfig.settings().timezoneSet && userConfig.settings().timezoneIdx < TIMEZONE_COUNT) {
+            gps.setPosixTZ(TIMEZONE_TABLE[userConfig.settings().timezoneIdx].posixTZ);
+        } else {
+            char tz[16];
+            snprintf(tz, sizeof(tz), "UTC%d", -userConfig.settings().utcOffset);
+            gps.setPosixTZ(tz);
+        }
+        gps.setLocationEnabled(userConfig.settings().gpsLocationEnabled);
+        gps.begin();
+        Serial.println("[GPS] GNSS module started");
+    } else {
+        Serial.println("[GPS] Disabled by config");
+    }
+#endif
 
     // Initialize power manager + audio
     power.begin();
@@ -575,6 +599,9 @@ void setup() {
     messagesScreen.setOpenCallback([](const std::string& peerHex) {
         messageView.setPeerHex(peerHex);
         ui.setScreen(&messageView);
+    });
+    messagesScreen.setAddContactCallback([](const std::string& peerHex) {
+        if (announceManager) announceManager->saveNode(peerHex);
     });
     messageView.setLXMFManager(&lxmf);
     messageView.setAnnounceManager(announceManager);
@@ -625,35 +652,82 @@ void setup() {
         }
     });
 
-    // Name input flow or straight to home
-    if (userConfig.settings().displayName.isEmpty()) {
-        // Show name input screen (boot mode stays on for clean branded look)
-        nameInputScreen.setDoneCallback([](const String& name) {
-            if (!name.isEmpty()) {
-                userConfig.settings().displayName = name;
-                if (sdStore.isReady()) {
-                    userConfig.save(sdStore, flash);
-                } else {
-                    userConfig.save(flash);
-                }
-            }
-            ui.setBootMode(false);
-            ui.setScreen(&homeScreen);
-            ui.tabBar().setActiveTab(TabBar::TAB_HOME);
-            announceWithName();
-            lastAutoAnnounce = millis();
-            Serial.println("[BOOT] Initial announce sent");
-        });
-        // First boot — go to name input (SD data is handled gracefully by dual-backend)
-        ui.setScreen(&nameInputScreen);
-        Serial.println("[BOOT] Showing name input screen");
-    } else {
+    // Boot flow: timezone → name → home
+    // Helper: finalize boot and go to home screen
+    auto finalizeBoot = []() {
         ui.setBootMode(false);
         ui.setScreen(&homeScreen);
         ui.tabBar().setActiveTab(TabBar::TAB_HOME);
         announceWithName();
         lastAutoAnnounce = millis();
         Serial.println("[BOOT] Initial announce sent");
+    };
+
+    // Helper: save config to best available backend
+    auto saveConfig = []() {
+        if (sdStore.isReady()) {
+            userConfig.save(sdStore, flash);
+        } else {
+            userConfig.save(flash);
+        }
+    };
+
+    // Name input callback — shared between fresh boot and timezone-only flow
+    nameInputScreen.setDoneCallback([=](const String& name) {
+        if (!name.isEmpty()) {
+            userConfig.settings().displayName = name;
+            saveConfig();
+        }
+        finalizeBoot();
+    });
+
+    // Timezone selection callback — apply TZ, then proceed to name or home
+    timezoneScreen.setDoneCallback([=](int tzIdx) {
+        userConfig.settings().timezoneIdx = (uint8_t)tzIdx;
+        userConfig.settings().utcOffset = TIMEZONE_TABLE[tzIdx].baseOffset;
+        userConfig.settings().timezoneSet = true;
+
+        // Apply timezone immediately
+        setenv("TZ", TIMEZONE_TABLE[tzIdx].posixTZ, 1);
+        tzset();
+#if HAS_GPS
+        if (gps.isRunning()) gps.setPosixTZ(TIMEZONE_TABLE[tzIdx].posixTZ);
+#endif
+        saveConfig();
+        Serial.printf("[BOOT] Timezone set: %s (UTC%+d)\n",
+                      TIMEZONE_TABLE[tzIdx].label, TIMEZONE_TABLE[tzIdx].baseOffset);
+
+        // If no display name yet, go to name input next
+        if (userConfig.settings().displayName.isEmpty()) {
+            ui.setScreen(&nameInputScreen);
+        } else {
+            finalizeBoot();
+        }
+    });
+
+    Serial.printf("[BOOT] displayName='%s' tzSet=%d wifiMode=%d\n",
+        userConfig.settings().displayName.c_str(),
+        (int)userConfig.settings().timezoneSet,
+        (int)userConfig.settings().wifiMode);
+
+    // Decide which screen to show first
+    if (!userConfig.settings().timezoneSet) {
+        // Timezone not set — show picker first
+        timezoneScreen.setSelectedIndex(userConfig.settings().timezoneIdx);
+        ui.setScreen(&timezoneScreen);
+        Serial.println("[BOOT] Showing timezone picker");
+    } else if (userConfig.settings().displayName.isEmpty()) {
+        // Timezone set but no name — show name input
+        ui.setScreen(&nameInputScreen);
+        Serial.println("[BOOT] Showing name input");
+    } else {
+        // Everything set — go straight to home
+        // Apply saved timezone
+        if (userConfig.settings().timezoneIdx < TIMEZONE_COUNT) {
+            setenv("TZ", TIMEZONE_TABLE[userConfig.settings().timezoneIdx].posixTZ, 1);
+            tzset();
+        }
+        finalizeBoot();
     }
 
     // Clear boot loop counter — setup completed successfully
@@ -741,7 +815,7 @@ void loop() {
             wifiSTAConnected = true;
             Serial.printf("[WIFI] STA connected: %s\n", WiFi.localIP().toString().c_str());
 
-            // NTP time sync — only start once per boot (configTzTime blocks for 5-15s)
+            // NTP time sync — configTzTime() is non-blocking (starts SNTP daemon)
             {
                 static bool ntpStarted = false;
                 if (!ntpStarted) {
@@ -758,8 +832,8 @@ void loop() {
             reloadTCPClients();
         } else if (!connected && wifiSTAConnected) {
             wifiSTAConnected = false;
-            // Stop and deregister TCP clients cleanly
-            for (auto* tcp : tcpClients) tcp->stop();
+            // Stop, free, and deregister TCP clients cleanly
+            for (auto* tcp : tcpClients) { tcp->stop(); delete tcp; }
             for (auto& iface : tcpIfaces) {
                 RNS::Transport::deregister_interface(iface);
             }
@@ -783,9 +857,23 @@ void loop() {
     }
 
     // 7. Announce manager deferred saves (contacts + name cache)
-    if (announceManager) announceManager->loop();
+    if (announceManager) {
+        announceManager->loop();
 
-    // 8. Power management
+        // Periodic stale node eviction (every 30 min)
+        static unsigned long lastEvict = 0;
+        if (now - lastEvict >= 1800000) {
+            lastEvict = now;
+            announceManager->evictStale();
+        }
+    }
+
+    // 8. GPS (read UART bytes — non-blocking, <1ms per call)
+#if HAS_GPS
+    if (gps.isRunning()) gps.loop();
+#endif
+
+    // 9. Power management
     power.loop();
 
     // 9. Power-aware RNS throttle
@@ -799,9 +887,18 @@ void loop() {
     if (now - lastRender >= RENDER_INTERVAL_MS) {
         lastRender = now;
         if (power.isScreenOn() && power.state() != PowerManager::DIMMED) {
-            // Status bar needs periodic refresh for battery + announce flash
+            // Status bar needs periodic refresh for battery + connection indicators
             if (now - lastStatusUpdate >= STATUS_UPDATE_MS) {
                 lastStatusUpdate = now;
+                // Update TCP connection status
+                bool anyTcpConnected = false;
+                for (auto* tcp : tcpClients) {
+                    if (tcp->isConnected()) { anyTcpConnected = true; break; }
+                }
+                ui.statusBar().setTCPConnected(anyTcpConnected);
+#if HAS_GPS
+                ui.statusBar().setGPSTimeFix(gps.hasTimeFix());
+#endif
                 ui.markStatusDirty();
             }
             ui.render();

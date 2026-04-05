@@ -10,13 +10,15 @@ namespace Theme {
 
 // --- Colors (RGB565) ---
 constexpr uint16_t BG           = 0x0000;  // #000000 pure black
-constexpr uint16_t PRIMARY      = 0x07E8;  // #00FF41 signal green (approx)
+constexpr uint16_t PRIMARY      = 0x07E8;  // #00FF41 signal green
 constexpr uint16_t SECONDARY    = 0x0664;  // #00CC33 dimmed green
-constexpr uint16_t MUTED        = 0x3326;  // #336633 dark green
+constexpr uint16_t MUTED        = 0x4229;  // #444444 medium gray (better contrast)
 constexpr uint16_t ERROR        = 0xF986;  // #FF3333 red
 constexpr uint16_t WARNING      = 0xFFE0;  // #FFFF00 bright yellow
-constexpr uint16_t BORDER       = 0x0220;  // #004400 subtle dark green
+constexpr uint16_t ACCENT       = 0x067F;  // #00CFFF cyan accent
+constexpr uint16_t BORDER       = 0x18E3;  // #1C1C1C subtle dark gray
 constexpr uint16_t SELECTION_BG = 0x0180;  // #003300 dark green
+constexpr uint16_t BAR_BG       = 0x0861;  // #0C0C0C near-black panel
 constexpr uint16_t TAB_ACTIVE   = PRIMARY;
 constexpr uint16_t TAB_INACTIVE = MUTED;
 constexpr uint16_t BADGE_BG     = ERROR;

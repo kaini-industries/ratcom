@@ -22,58 +22,51 @@ bool HomeScreen::handleKey(const KeyEvent& event) {
 }
 
 void HomeScreen::render(M5Canvas& canvas) {
-    int y = Theme::CONTENT_Y + 4;
+    int y = Theme::CONTENT_Y + 2;
     int lineH = Theme::CHAR_H + 3;
+    int pad = 4;
     canvas.setTextSize(Theme::FONT_SIZE);
 
-    // LXMF destination hash (what other devices use to reach you)
-    canvas.setTextColor(Theme::PRIMARY);
-    canvas.setCursor(4, y);
-    canvas.print("LXMF: ");
-    if (_rns) {
-        canvas.print(_rns->destinationHashStr());
-    } else {
-        canvas.print("not initialized");
-    }
-    y += lineH;
+    // === Identity card ===
+    int cardY = y;
+    int cardH = lineH * 2 + 6;
+    canvas.drawRoundRect(2, cardY, Theme::SCREEN_W - 4, cardH, 3, Theme::BORDER);
 
-    // Transport status
-    canvas.setTextColor(Theme::SECONDARY);
-    canvas.setCursor(4, y);
-    canvas.print("Transport: ");
-    if (_rns && _rns->isTransportActive()) {
-        canvas.setTextColor(Theme::PRIMARY);
-        canvas.print("ACTIVE");
+    y = cardY + 3;
+    // Display name
+    canvas.setTextColor(Theme::ACCENT);
+    canvas.setCursor(pad + 2, y);
+    if (_userConfig && !_userConfig->settings().displayName.isEmpty()) {
+        canvas.print(_userConfig->settings().displayName.c_str());
     } else {
         canvas.setTextColor(Theme::MUTED);
-        canvas.print("OFFLINE");
+        canvas.print("(no name set)");
     }
     y += lineH;
 
-    // Path count
+    // LXMF hash
     canvas.setTextColor(Theme::SECONDARY);
-    canvas.setCursor(4, y);
-    canvas.printf("Paths: %d  Links: %d",
-        _rns ? (int)_rns->pathCount() : 0,
-        _rns ? (int)_rns->linkCount() : 0);
-    y += lineH;
+    canvas.setCursor(pad + 2, y);
+    canvas.print("LXMF ");
+    canvas.setTextColor(Theme::PRIMARY);
+    if (_rns) {
+        canvas.print(_rns->destinationHashStr());
+    }
+    y += lineH + 4;
 
-    // Divider
-    canvas.drawFastHLine(4, y, Theme::SCREEN_W - 8, Theme::BORDER);
-    y += 4;
+    // === Radio card ===
+    cardY = y;
+    cardH = lineH * 2 + 6;
+    canvas.drawRoundRect(2, cardY, Theme::SCREEN_W - 4, cardH, 3, Theme::BORDER);
 
-    // Radio params with preset name
+    y = cardY + 3;
     canvas.setTextColor(Theme::SECONDARY);
-    canvas.setCursor(4, y);
+    canvas.setCursor(pad + 2, y);
     if (_radio && _radio->isRadioOnline()) {
         if (_userConfig) {
             const char* preset = detectPresetName(_userConfig->settings());
-            canvas.printf("LoRa: %s [SF%d %luk]",
+            canvas.printf("LoRa: %s  SF%d %luk",
                 preset,
-                _radio->getSpreadingFactor(),
-                (unsigned long)(_radio->getSignalBandwidth() / 1000));
-        } else {
-            canvas.printf("LoRa: SF%d BW%luk",
                 _radio->getSpreadingFactor(),
                 (unsigned long)(_radio->getSignalBandwidth() / 1000));
         }
@@ -83,46 +76,30 @@ void HomeScreen::render(M5Canvas& canvas) {
     }
     y += lineH;
 
-    // TX power + frequency
     if (_radio && _radio->isRadioOnline()) {
-        canvas.setTextColor(Theme::SECONDARY);
-        canvas.setCursor(4, y);
-        canvas.printf("%.1f MHz  TX: %d dBm  CR: %d",
+        canvas.setTextColor(Theme::MUTED);
+        canvas.setCursor(pad + 2, y);
+        canvas.printf("%.1f MHz  TX:%d dBm  CR:%d  P:%d L:%d",
             _radio->getFrequency() / 1000000.0,
-            _radio->getTxPower(), _radio->getCodingRate4());
+            _radio->getTxPower(), _radio->getCodingRate4(),
+            _rns ? (int)_rns->pathCount() : 0,
+            _rns ? (int)_rns->linkCount() : 0);
     }
-    y += lineH;
+    y += lineH + 4;
 
-    // Divider
-    canvas.drawFastHLine(4, y, Theme::SCREEN_W - 8, Theme::BORDER);
-    y += 4;
-
-    // Announce line
-    canvas.setTextColor(Theme::SECONDARY);
-    canvas.setCursor(4, y);
-    if (_rns && _rns->lastAnnounceTime() > 0) {
-        unsigned long ago = (millis() - _rns->lastAnnounceTime()) / 1000;
-        if (ago < 60) {
-            canvas.printf("Announce: %lus ago", ago);
-        } else {
-            canvas.printf("Announce: %lum ago", ago / 60);
-        }
-    } else {
-        canvas.print("Announce: never");
+    // === Announce button — vertically centered in remaining space ===
+    {
+        const char* label = "Announce [Enter]";
+        int btnW = strlen(label) * Theme::CHAR_W + 16;
+        int btnX = (Theme::SCREEN_W - btnW) / 2;
+        int btnH = Theme::CHAR_H + 6;
+        int remainingH = (Theme::CONTENT_Y + Theme::CONTENT_H) - y;
+        int btnY = y + (remainingH - btnH) / 2;
+        canvas.drawRoundRect(btnX, btnY, btnW, btnH, 3, Theme::PRIMARY);
+        canvas.setTextColor(Theme::PRIMARY);
+        canvas.setCursor(btnX + 8, btnY + 3);
+        canvas.print(label);
     }
-    canvas.setTextColor(Theme::MUTED);
-    canvas.print("  [Enter]");
-    y += lineH;
-
-    // Uptime & memory
-    canvas.setTextColor(Theme::MUTED);
-    canvas.setCursor(4, y);
-    unsigned long upSec = millis() / 1000;
-    unsigned long upMin = upSec / 60;
-    unsigned long upHr = upMin / 60;
-    canvas.printf("Up: %lu:%02lu:%02lu  Heap: %luK",
-        upHr, upMin % 60, upSec % 60,
-        (unsigned long)(ESP.getFreeHeap() / 1024));
 
     // Announce flash toast
     if (millis() < _announceFlashUntil) {

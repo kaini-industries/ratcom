@@ -65,13 +65,18 @@ bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& con
     msg.incoming = false;
     msg.status = LXMFStatus::QUEUED;
 
-    if ((int)_outQueue.size() >= RATPUTER_MAX_OUTQUEUE) {
+    if ((int)_outQueue.size() >= RATCOM_MAX_OUTQUEUE) {
         Serial.printf("[LXMF] WARNING: Outgoing queue full (%d), dropping oldest\n",
                       (int)_outQueue.size());
         _outQueue.pop_front();
     }
 
     _outQueue.push_back(msg);
+
+    // Save outgoing message to disk immediately (creates conversation entry)
+    if (_store) {
+        _store->saveMessage(msg);
+    }
 
     // Proactively request path so it's ready when sendDirect runs
     if (!RNS::Transport::has_path(destHash)) {
@@ -390,4 +395,12 @@ void LXMFManager::markRead(const std::string& peerHex) {
     if (_store) {
         _store->markConversationRead(peerHex);
     }
+}
+
+void LXMFManager::deleteConversation(const std::string& peerHex) {
+    if (_store) {
+        _store->deleteConversation(peerHex);
+    }
+    _unread.erase(peerHex);
+    Serial.printf("[LXMF] Conversation deleted: %s\n", peerHex.substr(0, 8).c_str());
 }

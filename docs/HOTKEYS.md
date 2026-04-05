@@ -53,7 +53,7 @@ When a text input field is active:
 - Device errors, current RSSI
 - Free heap, flash usage, uptime
 
-**Ctrl+T** sends a test packet with header `0xA0` and payload `RATPUTER_TEST_1234567890`, then reads back the FIFO buffer to verify the TX path.
+**Ctrl+T** sends a test packet with header `0xA0` and payload `RATCOM_TEST_1234567890`, then reads back the FIFO buffer to verify the TX path.
 
 **Ctrl+R** samples RSSI continuously for 5 seconds, printing each reading. Transmit from another device during sampling to verify the RX front-end is hearing RF.
 

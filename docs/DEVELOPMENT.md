@@ -317,7 +317,7 @@ ESP-IDF stores a core dump in the `coredump` partition (64 KB at 0x7F0000). To r
 
 ```bash
 python3 -m esptool --chip esp32s3 --port /dev/cu.usbmodem* read-flash 0x7F0000 0x10000 coredump.bin
-python3 -m esp_coredump info_corefile -t raw -c coredump.bin .pio/build/ratputer_915/firmware.elf
+python3 -m esp_coredump info_corefile -t raw -c coredump.bin .pio/build/ratcom_915/firmware.elf
 ```
 
 ### Common crash causes
@@ -335,10 +335,10 @@ These are defined in `Config.h` and can be adjusted:
 
 | Constant | Default | Purpose |
 |----------|---------|---------|
-| `RATPUTER_MAX_NODES` | 50 | Max discovered nodes in AnnounceManager |
-| `RATPUTER_MAX_MESSAGES_PER_CONV` | 100 | Max messages stored per conversation |
+| `RATCOM_MAX_NODES` | 50 | Max discovered nodes in AnnounceManager |
+| `RATCOM_MAX_MESSAGES_PER_CONV` | 100 | Max messages stored per conversation |
 | `FLASH_MSG_CACHE_LIMIT` | 20 | Keep only N most recent messages per conv in flash (SD has full history) |
-| `RATPUTER_MAX_OUTQUEUE` | 20 | Max pending outgoing LXMF messages |
+| `RATCOM_MAX_OUTQUEUE` | 20 | Max pending outgoing LXMF messages |
 | `MAX_TCP_CONNECTIONS` | 4 | Max simultaneous TCP client connections |
 | `TCP_RECONNECT_INTERVAL_MS` | 10000 | Retry interval for dropped TCP connections |
 | `TCP_CONNECT_TIMEOUT_MS` | 5000 | Timeout for TCP connect() |

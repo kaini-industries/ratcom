@@ -29,7 +29,7 @@ void BootScreen::render(M5Canvas& canvas) {
 
     // Version
     char verStr[32];
-    snprintf(verStr, sizeof(verStr), "v%s", RATPUTER_VERSION_STRING);
+    snprintf(verStr, sizeof(verStr), "v%s", RATCOM_VERSION_STRING);
     canvas.setTextColor(Theme::MUTED);
     int verW = strlen(verStr) * Theme::CHAR_W;
     canvas.setCursor((Theme::SCREEN_W - verW) / 2, 56);

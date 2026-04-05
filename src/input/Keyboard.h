@@ -50,5 +50,4 @@ private:
     KeyEvent _event = {};
     bool _hasEvent = false;
     KeyCallback _keyCallback;
-    unsigned long _lastCapsToggle = 0;
 };

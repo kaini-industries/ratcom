@@ -1,11 +1,23 @@
 #include "ReticulumManager.h"
 #include "config/Config.h"
+#include "storage/FlashStore.h"
 #include <Log.h>
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <map>
 #include <unordered_map>
 #include <string>
+
+// RAII lock guard for the shared LittleFS mutex
+struct FSLock {
+    FSLock() : _m(FlashStore::mutex()) {
+        if (_m) xSemaphoreTake(_m, portMAX_DELAY);
+    }
+    ~FSLock() {
+        if (_m) xSemaphoreGive(_m);
+    }
+    SemaphoreHandle_t _m;
+};
 
 // =============================================================================
 // LittleFS Filesystem Implementation for microReticulum
@@ -16,10 +28,12 @@ bool LittleFSFileSystem::init() {
 }
 
 bool LittleFSFileSystem::file_exists(const char* file_path) {
+    FSLock lock;
     return LittleFS.exists(file_path);
 }
 
 size_t LittleFSFileSystem::read_file(const char* file_path, RNS::Bytes& data) {
+    FSLock lock;
     File f = LittleFS.open(file_path, "r");
     if (!f) return 0;
     size_t size = f.size();
@@ -30,6 +44,7 @@ size_t LittleFSFileSystem::read_file(const char* file_path, RNS::Bytes& data) {
 }
 
 size_t LittleFSFileSystem::write_file(const char* file_path, const RNS::Bytes& data) {
+    FSLock lock;
     // Ensure parent directory exists
     String path = String(file_path);
     int lastSlash = path.lastIndexOf('/');
@@ -52,26 +67,32 @@ RNS::FileStream LittleFSFileSystem::open_file(const char* file_path, RNS::FileSt
 }
 
 bool LittleFSFileSystem::remove_file(const char* file_path) {
+    FSLock lock;
     return LittleFS.remove(file_path);
 }
 
 bool LittleFSFileSystem::rename_file(const char* from, const char* to) {
+    FSLock lock;
     return LittleFS.rename(from, to);
 }
 
 bool LittleFSFileSystem::directory_exists(const char* directory_path) {
+    FSLock lock;
     return LittleFS.exists(directory_path);
 }
 
 bool LittleFSFileSystem::create_directory(const char* directory_path) {
+    FSLock lock;
     return LittleFS.mkdir(directory_path);
 }
 
 bool LittleFSFileSystem::remove_directory(const char* directory_path) {
+    FSLock lock;
     return LittleFS.rmdir(directory_path);
 }
 
 std::list<std::string> LittleFSFileSystem::list_directory(const char* directory_path, Callbacks::DirectoryListing callback) {
+    FSLock lock;
     std::list<std::string> entries;
     File dir = LittleFS.open(directory_path);
     if (!dir || !dir.isDirectory()) return entries;
@@ -80,16 +101,20 @@ std::list<std::string> LittleFSFileSystem::list_directory(const char* directory_
         const char* name = f.name();
         entries.push_back(name);
         if (callback) callback(name);
+        f.close();
         f = dir.openNextFile();
     }
+    dir.close();
     return entries;
 }
 
 size_t LittleFSFileSystem::storage_size() {
+    FSLock lock;
     return LittleFS.totalBytes();
 }
 
 size_t LittleFSFileSystem::storage_available() {
+    FSLock lock;
     return LittleFS.totalBytes() - LittleFS.usedBytes();
 }
 
@@ -107,30 +132,12 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
     RNS::Utilities::OS::register_filesystem(fs);
     Serial.println("[RNS] Filesystem registered");
 
-    // Restore routing tables and known destinations from SD if missing on flash
-    if (_sd && _sd->isReady()) {
-        static const char* files[] = {"/destination_table", "/packet_hashlist", "/known_destinations"};
-        for (const char* name : files) {
-            if (!LittleFS.exists(name)) {
-                char sdPath[64];
-                snprintf(sdPath, sizeof(sdPath), "/ratcom/transport%s", name);
-                uint8_t* buf = (uint8_t*)malloc(4096);
-                if (!buf) { Serial.println("[RNS] SD restore: malloc failed"); continue; }
-                size_t len = 0;
-                if (_sd->readFile(sdPath, buf, 4096, len) && len > 0) {
-                    File f = LittleFS.open(name, "w");
-                    if (f) { f.write(buf, len); f.close(); }
-                    Serial.printf("[RNS] Restored %s from SD (%d bytes)\n", name, (int)len);
-                }
-                free(buf);
-            }
-        }
-    }
+    // Endpoint node: routing tables are rebuilt from announces on each boot.
+    // No need to restore transport tables from SD — saves ~12KB heap + boot time.
 
-    // Create and register LoRa interface
+    // Create and register LoRa interface (default mode — endpoint, not gateway)
     _loraImpl = new LoRaInterface(radio, "LoRa.915");
     _loraIface = _loraImpl;
-    _loraIface.mode(RNS::Type::Interface::MODE_GATEWAY);
     RNS::Transport::register_interface(_loraIface);
     if (!_loraImpl->start()) {
         Serial.println("[RNS] WARNING: LoRa interface failed to start — radio offline");
@@ -144,9 +151,9 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
     RNS::loglevel(RNS::LOG_WARNING);
     RNS::Reticulum::transport_enabled(false);
     RNS::Reticulum::probe_destination_enabled(true);
-    // Cap table sizes — raised for 100+ node hubs while staying within ESP32 RAM
-    RNS::Transport::path_table_maxsize(256);
-    RNS::Transport::announce_table_maxsize(128);
+    // Endpoint tables — 8-bit canvas frees ~32KB for these
+    RNS::Transport::path_table_maxsize(48);
+    RNS::Transport::announce_table_maxsize(48);
     _reticulum.start();
     Serial.println("[RNS] Reticulum started (Endpoint)");
 
@@ -161,8 +168,15 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
         static unsigned int count = 0;
         if (now - windowStart >= 1000) { windowStart = now; count = 0; }
 
-        // Adaptive rate: tighter during first 60s boot flood, then normal
-        unsigned int maxRate = (now < 60000) ? 3 : RATCOM_MAX_ANNOUNCES_PER_SEC;
+        // Adaptive rate: tight during boot flood, then normal, emergency if low heap
+        unsigned int maxRate;
+        if (ESP.getFreeHeap() < 15000) {
+            maxRate = 1;  // Emergency: almost no processing
+        } else if (now < 60000) {
+            maxRate = 2;  // Boot flood
+        } else {
+            maxRate = RATCOM_MAX_ANNOUNCES_PER_SEC;
+        }
         if (++count > maxRate) return false;
 
         // Skip re-validation of known paths (saves ~100ms Ed25519 per announce)
@@ -177,8 +191,8 @@ bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
             if (it != lastRevalidate.end() && (now - it->second) < 300000) return false;
             lastRevalidate[key] = now;
 
-            // Cap map size to prevent unbounded growth
-            if (lastRevalidate.size() > 300) lastRevalidate.clear();
+            // Cap map to save heap
+            if (lastRevalidate.size() > 40) lastRevalidate.clear();
         }
 
         return true;
@@ -334,27 +348,7 @@ void ReticulumManager::persistTaskFunc(void* param) {
                 case 1:
                     RNS::Identity::persist_data();
                     break;
-                case 2:
-                    if (self->_sd && self->_sd->isReady()) {
-                        static const char* files[] = {"/destination_table", "/packet_hashlist", "/known_destinations"};
-                        for (const char* name : files) {
-                            File f = LittleFS.open(name, "r");
-                            if (f && f.size() > 0) {
-                                size_t sz = f.size();
-                                uint8_t* buf = (uint8_t*)malloc(sz);
-                                if (buf) {
-                                    f.readBytes((char*)buf, sz);
-                                    char sdPath[64];
-                                    snprintf(sdPath, sizeof(sdPath), "/ratcom/transport%s", name);
-                                    self->_sd->ensureDir("/ratcom/transport");
-                                    self->_sd->writeDirect(sdPath, buf, sz);
-                                    free(buf);
-                                }
-                            }
-                            if (f) f.close();
-                        }
-                    }
-                    break;
+                // Cycle 2 removed — endpoint doesn't need SD transport backup
             }
             Serial.printf("[PERSIST] Cycle %d done (%lums, core %d)\n",
                           cycle, millis() - start, xPortGetCoreID());
@@ -373,7 +367,7 @@ void ReticulumManager::persistData() {
             case 1: RNS::Identity::persist_data(); break;
         }
     }
-    _persistCycle = (_persistCycle + 1) % 3;
+    _persistCycle = (_persistCycle + 1) % 2;  // Only 2 cycles now (transport + identity)
 }
 
 String ReticulumManager::identityHash() const {
@@ -389,7 +383,7 @@ String ReticulumManager::destinationHashStr() const {
     if (!_destination) return "unknown";
     std::string hex = _destination.hash().toHex();
     if (hex.length() >= 12) {
-        return String((hex.substr(0, 4) + ":" + hex.substr(4, 4) + ":" + hex.substr(8, 4)).c_str());
+        return String((hex.substr(0, 6) + "::" + hex.substr(hex.length() - 6, 6)).c_str());
     }
     return String(hex.c_str());
 }
@@ -404,15 +398,6 @@ size_t ReticulumManager::linkCount() const {
 
 void ReticulumManager::announce(const RNS::Bytes& appData) {
     if (!_transportActive) return;
-    Serial.printf("[TX-DBG] dest_hash:     %s\n", _destination.hash().toHex().c_str());
-    Serial.printf("[TX-DBG] identity_hash: %s\n", _identity.hexhash().c_str());
-    Serial.printf("[TX-DBG] public_key:    %s\n", _identity.get_public_key().toHex().c_str());
-    RNS::Bytes nh = RNS::Identity::full_hash(RNS::Bytes("lxmf.delivery")).left(10);
-    Serial.printf("[TX-DBG] name_hash:     %s\n", nh.toHex().c_str());
-    RNS::Bytes hm = nh + _identity.hash();
-    Serial.printf("[TX-DBG] hash_material: %s\n", hm.toHex().c_str());
-    RNS::Bytes eh = RNS::Identity::full_hash(hm).left(16);
-    Serial.printf("[TX-DBG] recomputed:    %s\n", eh.toHex().c_str());
     _destination.announce(appData);
     _lastAnnounceTime = millis();
     Serial.println("[RNS] Announce sent");

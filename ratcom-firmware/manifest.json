@@ -1,0 +1,12 @@
+{
+  "chipFamily": "ESP32-S3",
+  "flashSize": "8MB",
+  "flashMode": "dio",
+  "flashFreq": "80m",
+  "parts": [
+    { "path": "bootloader.bin", "offset": "0x0000" },
+    { "path": "partitions.bin", "offset": "0x8000" },
+    { "path": "boot_app0.bin", "offset": "0xe000" },
+    { "path": "firmware.bin", "offset": "0x10000" }
+  ]
+}

@@ -1,6 +1,6 @@
 #include "MessageStore.h"
 #include "config/Config.h"
-#include <LittleFS.h>
+// All LittleFS access goes through FlashStore (mutex-protected)
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <algorithm>
@@ -44,9 +44,22 @@ bool MessageStore::begin(FlashStore* flash, SDStore* sd) {
     _writeQueue.setCounterRef(&_nextReceiveCounter);
 
     refreshConversations();
-    Serial.printf("[MSGSTORE] %d conversations found, receive counter=%lu\n",
-                  (int)_conversations.size(), (unsigned long)_nextReceiveCounter);
+    countTotalMessages();
+    Serial.printf("[MSGSTORE] %d conversations, %d total messages, limit=%d, counter=%lu\n",
+                  (int)_conversations.size(), _totalMessageCount, messageLimit(),
+                  (unsigned long)_nextReceiveCounter);
     return true;
+}
+
+int MessageStore::messageLimit() const {
+    return (_sd && _sd->isReady()) ? RATCOM_MSG_LIMIT_SD : RATCOM_MSG_LIMIT_FLASH;
+}
+
+void MessageStore::countTotalMessages() {
+    _totalMessageCount = 0;
+    for (auto& conv : _conversations) {
+        _totalMessageCount += messageCount(conv);
+    }
 }
 
 void MessageStore::initReceiveCounter() {
@@ -73,6 +86,7 @@ void MessageStore::initReceiveCounter() {
                 unsigned long val = strtoul(name.c_str(), nullptr, 10);
                 if (val > maxPrefix) maxPrefix = (uint32_t)val;
             }
+            entry.close();
             entry = dir.openNextFile();
         }
     };
@@ -85,20 +99,26 @@ void MessageStore::initReceiveCounter() {
                 if (peerDir.isDirectory()) {
                     scanDir(peerDir);
                 }
+                peerDir.close();
                 peerDir = dir.openNextFile();
             }
         }
+        dir.close();
     }
 
-    File dir = LittleFS.open(PATH_MESSAGES);
-    if (dir && dir.isDirectory()) {
-        File peerDir = dir.openNextFile();
-        while (peerDir) {
-            if (peerDir.isDirectory()) {
-                scanDir(peerDir);
+    {
+        File dir = _flash->openDir(PATH_MESSAGES);
+        if (dir && dir.isDirectory()) {
+            File peerDir = dir.openNextFile();
+            while (peerDir) {
+                if (peerDir.isDirectory()) {
+                    scanDir(peerDir);
+                }
+                peerDir.close();
+                peerDir = dir.openNextFile();
             }
-            peerDir = dir.openNextFile();
         }
+        dir.close();
     }
 
     // Safety: detect overflow from unmigrated old-format files
@@ -123,7 +143,7 @@ void MessageStore::initReceiveCounter() {
 void MessageStore::migrateFlashToSD() {
     if (!_sd || !_sd->isReady() || !_flash) return;
 
-    File dir = LittleFS.open(PATH_MESSAGES);
+    File dir = _flash->openDir(PATH_MESSAGES);
     if (!dir || !dir.isDirectory()) return;
 
     int migrated = 0;
@@ -148,13 +168,16 @@ void MessageStore::migrateFlashToSD() {
                         }
                     }
                 }
+                entry.close();
                 entry = peerDir.openNextFile();
             }
 
-            enforceFlashLimit(peerHex);
+            enforceFlashCache(peerHex);
         }
+        peerDir.close();
         peerDir = dir.openNextFile();
     }
+    dir.close();
 
     if (migrated > 0) {
         Serial.printf("[MSGSTORE] Migrated %d messages from flash to SD\n", migrated);
@@ -186,9 +209,11 @@ void MessageStore::migrateOldFilenames() {
                     if (peerDir.isDirectory()) {
                         peerDirs.push_back(String(SD_PATH_MESSAGES) + peerDir.name());
                     }
+                    peerDir.close();
                     peerDir = dir.openNextFile();
                 }
             }
+            dir.close();
         }
 
         for (auto& peerPath : peerDirs) {
@@ -206,8 +231,10 @@ void MessageStore::migrateOldFilenames() {
                         oldFiles.push_back({name, prefix});
                     }
                 }
+                entry.close();
                 entry = d.openNextFile();
             }
+            d.close();
 
             if (oldFiles.empty()) continue;
 
@@ -240,23 +267,25 @@ void MessageStore::migrateOldFilenames() {
     {
         std::vector<String> peerDirs;
         {
-            File dir = LittleFS.open(PATH_MESSAGES);
+            File dir = _flash->openDir(PATH_MESSAGES);
             if (dir && dir.isDirectory()) {
                 File peerDir = dir.openNextFile();
                 while (peerDir) {
                     if (peerDir.isDirectory()) {
                         peerDirs.push_back(String(PATH_MESSAGES) + peerDir.name());
                     }
+                    peerDir.close();
                     peerDir = dir.openNextFile();
                 }
             }
+            dir.close();
         }
 
         for (auto& peerPath : peerDirs) {
             struct OldFile { String name; unsigned long prefix; };
             std::vector<OldFile> oldFiles;
 
-            File d = LittleFS.open(peerPath);
+            File d = _flash->openDir(peerPath);
             if (!d || !d.isDirectory()) continue;
             File entry = d.openNextFile();
             while (entry) {
@@ -267,8 +296,10 @@ void MessageStore::migrateOldFilenames() {
                         oldFiles.push_back({name, prefix});
                     }
                 }
+                entry.close();
                 entry = d.openNextFile();
             }
+            d.close();
 
             if (oldFiles.empty()) continue;
 
@@ -285,7 +316,7 @@ void MessageStore::migrateOldFilenames() {
                 String oldPath = peerPath + "/" + f.name;
                 String newPath = peerPath + "/" + newName;
 
-                LittleFS.rename(oldPath, newPath);
+                _flash->rename(oldPath, newPath);
                 totalMigrated++;
                 yield();
             }
@@ -308,25 +339,31 @@ void MessageStore::refreshConversations() {
                 if (entry.isDirectory()) {
                     _conversations.push_back(entry.name());
                 }
+                entry.close();
                 entry = dir.openNextFile();
             }
         }
+        dir.close();
     }
 
-    File dir = LittleFS.open(PATH_MESSAGES);
-    if (dir && dir.isDirectory()) {
-        File entry = dir.openNextFile();
-        while (entry) {
-            if (entry.isDirectory()) {
-                std::string name = entry.name();
-                bool found = false;
-                for (auto& c : _conversations) {
-                    if (c == name) { found = true; break; }
+    {
+        File dir = _flash->openDir(PATH_MESSAGES);
+        if (dir && dir.isDirectory()) {
+            File entry = dir.openNextFile();
+            while (entry) {
+                if (entry.isDirectory()) {
+                    std::string name = entry.name();
+                    bool found = false;
+                    for (auto& c : _conversations) {
+                        if (c == name) { found = true; break; }
+                    }
+                    if (!found) _conversations.push_back(name);
                 }
-                if (!found) _conversations.push_back(name);
+                entry.close();
+                entry = dir.openNextFile();
             }
-            entry = dir.openNextFile();
         }
+        dir.close();
     }
 }
 
@@ -341,11 +378,22 @@ void MessageStore::ensureConvDirs(const std::string& peerHex) {
         String flashDir = conversationDir(peerHex);
         _flash->ensureDir(flashDir.c_str());
     }
+
+    // Cap cache to prevent unbounded growth
+    if (_ensuredDirs.size() >= 64) {
+        _ensuredDirs.clear();
+    }
     _ensuredDirs.insert(peerHex);
 }
 
 bool MessageStore::saveMessage(const LXMFMessage& msg) {
     if (!_flash) return false;
+
+    // Global capacity check — refuse new messages when full
+    if (isFull()) {
+        Serial.println("[MSGSTORE] Storage full — message rejected");
+        return false;
+    }
 
     std::string peerHex = msg.incoming ?
         msg.sourceHash.toHex() : msg.destHash.toHex();
@@ -393,22 +441,22 @@ bool MessageStore::saveMessage(const LXMFMessage& msg) {
     }
     if (!found) _conversations.push_back(peerHex);
 
-    // Limit enforcement deferred to periodic (not per-message)
-    unsigned long now = millis();
-    if (now - _lastLimitEnforce >= LIMIT_ENFORCE_INTERVAL) {
-        _lastLimitEnforce = now;
-        enforceLimitsAll();
+    _totalMessageCount++;
+
+    // Trim flash cache when SD is primary (keep flash lean)
+    if (_sd && _sd->isReady()) {
+        static unsigned long lastFlashTrim = 0;
+        unsigned long now = millis();
+        if (now - lastFlashTrim >= 30000) {
+            lastFlashTrim = now;
+            for (auto& conv : _conversations) {
+                enforceFlashCache(conv);
+                yield();
+            }
+        }
     }
 
     return true;
-}
-
-void MessageStore::enforceLimitsAll() {
-    for (auto& conv : _conversations) {
-        enforceFlashLimit(conv);
-        enforceSDLimit(conv);
-        yield();
-    }
 }
 
 std::vector<LXMFMessage> MessageStore::loadConversation(const std::string& peerHex, int limit, int offset) const {
@@ -430,15 +478,17 @@ std::vector<LXMFMessage> MessageStore::loadConversation(const std::string& peerH
                         filenames.push_back(name);
                     }
                 }
+                entry.close();
                 entry = d.openNextFile();
             }
             useSD = true;
         }
+        d.close();
     }
 
     if (!useSD && _flash) {
         sourceDir = conversationDir(peerHex);
-        File d = LittleFS.open(sourceDir);
+        File d = _flash->openDir(sourceDir);
         if (d && d.isDirectory()) {
             File entry = d.openNextFile();
             while (entry) {
@@ -448,9 +498,11 @@ std::vector<LXMFMessage> MessageStore::loadConversation(const std::string& peerH
                         filenames.push_back(name);
                     }
                 }
+                entry.close();
                 entry = d.openNextFile();
             }
         }
+        d.close();
     }
 
     std::sort(filenames.begin(), filenames.end());
@@ -530,14 +582,17 @@ int MessageStore::messageCount(const std::string& peerHex) const {
                     String name = entry.name();
                     if (!name.startsWith(".")) count++;
                 }
+                entry.close();
                 entry = d.openNextFile();
             }
+            d.close();
             return count;
         }
+        d.close();
     }
 
     String dir = conversationDir(peerHex);
-    File d = LittleFS.open(dir);
+    File d = _flash->openDir(dir);
     if (!d || !d.isDirectory()) return 0;
 
     int count = 0;
@@ -547,12 +602,17 @@ int MessageStore::messageCount(const std::string& peerHex) const {
             String name = entry.name();
             if (!name.startsWith(".")) count++;
         }
+        entry.close();
         entry = d.openNextFile();
     }
+    d.close();
     return count;
 }
 
 bool MessageStore::deleteConversation(const std::string& peerHex) {
+    // Count before deleting so we can update global total
+    int deleted = messageCount(peerHex);
+
     if (_sd && _sd->isReady()) {
         String sdDir = sdConversationDir(peerHex);
         File d = _sd->openDir(sdDir.c_str());
@@ -569,23 +629,26 @@ bool MessageStore::deleteConversation(const std::string& peerHex) {
     }
 
     String dir = conversationDir(peerHex);
-    File d = LittleFS.open(dir);
+    File d = _flash->openDir(dir);
     if (d && d.isDirectory()) {
         File entry = d.openNextFile();
         while (entry) {
             String path = String(dir) + "/" + entry.name();
             entry.close();
-            LittleFS.remove(path);
+            _flash->remove(path);
             entry = d.openNextFile();
         }
     }
-    LittleFS.rmdir(dir);
+    _flash->removeDir(dir);
 
     _conversations.erase(
         std::remove(_conversations.begin(), _conversations.end(), peerHex),
         _conversations.end());
 
     _ensuredDirs.erase(peerHex);
+    _totalMessageCount = std::max(0, _totalMessageCount - deleted);
+    Serial.printf("[MSGSTORE] Deleted conversation %s (%d messages), total now %d\n",
+                  peerHex.substr(0, 8).c_str(), deleted, _totalMessageCount);
     return true;
 }
 
@@ -637,6 +700,7 @@ int MessageStore::unreadCountForPeer(const std::string& peerHex) const {
                     if (counter > lastRead) count++;
                 }
             }
+            entry.close();
             entry = d.openNextFile();
         }
     };
@@ -646,16 +710,19 @@ int MessageStore::unreadCountForPeer(const std::string& peerHex) const {
         File d = _sd->openDir(sdDir.c_str());
         if (d && d.isDirectory()) {
             countInDir(d);
+            d.close();
             return count;
         }
+        d.close();
     }
 
     if (_flash) {
         String dir = conversationDir(peerHex);
-        File d = LittleFS.open(dir);
+        File d = _flash->openDir(dir);
         if (d && d.isDirectory()) {
             countInDir(d);
         }
+        d.close();
     }
 
     return count;
@@ -669,11 +736,12 @@ String MessageStore::sdConversationDir(const std::string& peerHex) const {
     return String(SD_PATH_MESSAGES) + peerHex.substr(0, 16).c_str();
 }
 
-void MessageStore::enforceFlashLimit(const std::string& peerHex) {
+// Trim flash to cache size when SD is the primary store
+void MessageStore::enforceFlashCache(const std::string& peerHex) {
     String dir = conversationDir(peerHex);
     std::vector<String> files;
 
-    File d = LittleFS.open(dir);
+    File d = _flash->openDir(dir);
     if (!d || !d.isDirectory()) return;
 
     File entry = d.openNextFile();
@@ -684,50 +752,19 @@ void MessageStore::enforceFlashLimit(const std::string& peerHex) {
                 files.push_back(String(dir) + "/" + name);
             }
         }
+        entry.close();
         entry = d.openNextFile();
     }
+    d.close();
 
-    int limit = (_sd && _sd->isReady()) ? FLASH_MSG_CACHE_LIMIT : RATPUTER_MAX_MESSAGES_PER_CONV;
-    if ((int)files.size() <= limit) return;
+    if ((int)files.size() <= FLASH_MSG_CACHE_LIMIT) return;
 
     std::sort(files.begin(), files.end());
 
-    int excess = files.size() - limit;
+    int excess = files.size() - FLASH_MSG_CACHE_LIMIT;
     for (int i = 0; i < excess; i++) {
-        LittleFS.remove(files[i]);
+        _flash->remove(files[i]);
     }
-    Serial.printf("[MSGSTORE] Flash trimmed %d old messages for %s (limit=%d)\n",
-                  excess, peerHex.substr(0, 8).c_str(), limit);
-}
-
-void MessageStore::enforceSDLimit(const std::string& peerHex) {
-    if (!_sd || !_sd->isReady()) return;
-
-    String dir = sdConversationDir(peerHex);
-    std::vector<String> files;
-
-    File d = _sd->openDir(dir.c_str());
-    if (!d || !d.isDirectory()) return;
-
-    File entry = d.openNextFile();
-    while (entry) {
-        if (!entry.isDirectory()) {
-            String name = entry.name();
-            if (!name.startsWith(".")) {
-                files.push_back(dir + "/" + name);
-            }
-        }
-        entry = d.openNextFile();
-    }
-
-    if ((int)files.size() <= RATPUTER_MAX_MESSAGES_PER_CONV) return;
-
-    std::sort(files.begin(), files.end());
-
-    int excess = files.size() - RATPUTER_MAX_MESSAGES_PER_CONV;
-    for (int i = 0; i < excess; i++) {
-        _sd->remove(files[i].c_str());
-    }
-    Serial.printf("[MSGSTORE] SD trimmed %d old messages for %s\n",
+    Serial.printf("[MSGSTORE] Flash cache trimmed %d for %s\n",
                   excess, peerHex.substr(0, 8).c_str());
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "config/Config.h"
 #include "storage/FlashStore.h"
 #include "storage/SDStore.h"
 #include "storage/WriteQueue.h"
@@ -9,6 +10,7 @@
 #include <string>
 #include <map>
 #include <set>
+#include <atomic>
 
 class MessageStore {
 public:
@@ -44,16 +46,22 @@ public:
     // Get current receive counter
     uint32_t currentReceiveCounter() const { return _nextReceiveCounter; }
 
+    // Global message capacity
+    int totalMessageCount() const { return _totalMessageCount; }
+    int messageLimit() const;
+    bool isFull() const { return _totalMessageCount >= messageLimit(); }
+    bool isNearFull() const { return _totalMessageCount >= messageLimit() * RATCOM_MSG_WARN_PCT / 100; }
+    int remainingCapacity() const { return std::max(0, messageLimit() - _totalMessageCount); }
+
 private:
     String conversationDir(const std::string& peerHex) const;
     String sdConversationDir(const std::string& peerHex) const;
 
-    void enforceFlashLimit(const std::string& peerHex);
-    void enforceSDLimit(const std::string& peerHex);
-    void enforceLimitsAll();
+    void enforceFlashCache(const std::string& peerHex);
     void migrateFlashToSD();
     void migrateOldFilenames();
     void initReceiveCounter();
+    void countTotalMessages();
     uint32_t readLastReadCounter(const std::string& peerHex) const;
 
     // Ensure conversation directories exist (cached — only creates once per peer)
@@ -63,12 +71,9 @@ private:
     SDStore* _sd = nullptr;
     WriteQueue _writeQueue;
     std::vector<std::string> _conversations;
-    volatile uint32_t _nextReceiveCounter = 0;
+    std::atomic<uint32_t> _nextReceiveCounter{0};
+    int _totalMessageCount = 0;
 
     // Directory creation cache — avoids repeated ensureDir calls
     std::set<std::string> _ensuredDirs;
-
-    // Periodic limit enforcement
-    unsigned long _lastLimitEnforce = 0;
-    static constexpr unsigned long LIMIT_ENFORCE_INTERVAL = 60000;
 };

@@ -153,7 +153,12 @@ String SDStore::readString(const char* path) {
         if (!f) return "";
         Serial.printf("[SD] Restored from backup: %s\n", path);
     }
-
+    // Guard against corrupted/huge files exhausting heap
+    if (f.size() > 16384) {
+        Serial.printf("[SD] readString: file too large (%d bytes): %s\n", (int)f.size(), path);
+        f.close();
+        return "";
+    }
     String result = f.readString();
     f.close();
     return result;

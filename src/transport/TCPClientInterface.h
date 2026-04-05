@@ -35,9 +35,12 @@ private:
     uint16_t _port;
     unsigned long _lastAttempt = 0;
     unsigned long _lastRxTime = 0;
-    uint8_t* _rxBuffer = nullptr;
-    uint8_t* _txBuffer = nullptr;
-    uint8_t* _wrapBuffer = nullptr;  // Heap-allocated packet rewrite buffer
+    // Shared static buffers — only one TCP connection is active at a time in the main loop
+    // Saves ~8KB per additional connection vs per-instance allocation
+    static uint8_t* _rxBuffer;
+    static uint8_t* _txBuffer;
+    static uint8_t* _wrapBuffer;
+    static bool _buffersAllocated;
     static constexpr size_t RX_BUFFER_SIZE = 2048;
     static constexpr size_t TX_BUFFER_SIZE = RX_BUFFER_SIZE * 2 + 2;
 
@@ -52,6 +55,9 @@ private:
     // Pending announces: buffered until hub transport_id is learned
     std::vector<RNS::Bytes> _pendingAnnounces;
 
+    // Reconnection backoff state
+    unsigned long _reconnectBackoff = 1000;   // starts at 1s, grows exponentially
+
     // Persistent HDLC frame reassembly state (survives across loop() calls)
     bool _inFrame = false;
     bool _escaped = false;
@@ -60,7 +66,7 @@ private:
     static constexpr uint8_t FRAME_START = 0x7E;
     static constexpr uint8_t FRAME_ESC   = 0x7D;
     static constexpr uint8_t FRAME_XOR   = 0x20;
-    static constexpr unsigned long TCP_KEEPALIVE_TIMEOUT_MS = 300000; // 5 min
+    static constexpr unsigned long TCP_KEEPALIVE_TIMEOUT_MS = 120000; // 2 min (mobile NAT friendly)
     static constexpr unsigned long TCP_LOOP_BUDGET_MS = 25;
 
 public:

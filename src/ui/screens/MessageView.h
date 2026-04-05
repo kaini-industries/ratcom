@@ -55,6 +55,7 @@ private:
     BackCallback _backCb;
     UnreadUpdateCb _unreadCb;
     bool _needsRefresh = false;
+    bool _hasNewBelow = false;  // True if new messages arrived while scrolled up
 
     // Pending messages not yet flushed to disk — merged on refreshMessages()
     std::map<std::string, std::vector<LXMFMessage>> _pendingMessages;

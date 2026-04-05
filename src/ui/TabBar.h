@@ -21,6 +21,6 @@ public:
 private:
     int _activeTab = 0;
     int _unreadCounts[4] = {0};
-    static constexpr const char* TAB_LABELS[4] = {"Home", "Msgs", "Nodes", "Setup"};
+    static constexpr const char* TAB_LABELS[4] = {"Home", "Msgs", "Nodes", "Settings"};
     bool* _dirty = nullptr;
 };

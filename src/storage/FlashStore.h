@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 class FlashStore {
 public:
@@ -23,12 +25,27 @@ public:
     bool ensureDir(const char* path);
     bool exists(const char* path);
     bool remove(const char* path);
+    bool removeDir(const char* path);
+    bool rename(const char* from, const char* to);
+    File openDir(const char* path);
+    File openFile(const char* path, const char* mode = "r");
+
+    // String overloads (avoid .c_str() at every call site)
+    bool remove(const String& p) { return remove(p.c_str()); }
+    bool removeDir(const String& p) { return removeDir(p.c_str()); }
+    bool rename(const String& f, const String& t) { return rename(f.c_str(), t.c_str()); }
+    File openDir(const String& p) { return openDir(p.c_str()); }
 
     // Format (factory reset)
     bool format();
 
-    bool isReady() const { return _ready; }
+    bool isReady();  // Checks mount health, auto-remounts if needed
+
+    // Global LittleFS mutex — shared with LittleFSFileSystem (microReticulum)
+    static SemaphoreHandle_t mutex();
 
 private:
+    void cleanOrphanedFiles();
     bool _ready = false;
+    static SemaphoreHandle_t _mutex;
 };

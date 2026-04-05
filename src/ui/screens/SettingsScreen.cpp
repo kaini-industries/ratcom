@@ -2,6 +2,7 @@
 #include "ui/Theme.h"
 #include "config/Config.h"
 #include <algorithm>
+#include <Preferences.h>
 
 void SettingsScreen::onEnter() {
     _subMenu = MENU_MAIN;
@@ -506,13 +507,15 @@ void SettingsScreen::render(M5Canvas& canvas) {
 
     int y0 = Theme::CONTENT_Y;
 
-    // Header
+    // Header with accent bar
     const char* headers[] = {"SETTINGS", "RADIO", "WIFI", "TCP CONNECTIONS",
                              "SD CARD", "DISPLAY", "AUDIO", "ABOUT", "WIFI SCAN"};
-    canvas.setTextColor(Theme::SECONDARY);
+    canvas.fillRect(0, y0, Theme::CONTENT_W, 11, Theme::BAR_BG);
+    canvas.fillRect(0, y0, 2, 11, Theme::ACCENT);  // left accent bar
+    canvas.setTextColor(Theme::ACCENT);
     canvas.setTextSize(Theme::FONT_SIZE);
-    canvas.drawString(headers[_subMenu], 4, y0 + 2);
-    canvas.drawFastHLine(0, y0 + 10, Theme::CONTENT_W, Theme::BORDER);
+    canvas.drawString(headers[_subMenu], 6, y0 + 2);
+    canvas.drawFastHLine(0, y0 + 11, Theme::CONTENT_W, Theme::BORDER);
 
     if (_editing) {
         // Show field name
@@ -528,6 +531,21 @@ void SettingsScreen::render(M5Canvas& canvas) {
         canvas.drawString("Enter=save  Esc=cancel", 4, y0 + 44);
     } else {
         _list.render(canvas, 0, y0 + 12, Theme::CONTENT_W, Theme::CONTENT_H - 14);
+    }
+
+    // Confirmation dialog overlay
+    if (_confirmPending) {
+        const char* prompt = _confirmAction == 0 ?
+            "Factory Reset? Y/N" : "Wipe SD Data? Y/N";
+        int tw = strlen(prompt) * Theme::CHAR_W + 16;
+        int th = Theme::CHAR_H + 10;
+        int tx = (Theme::CONTENT_W - tw) / 2;
+        int ty = Theme::CONTENT_Y + Theme::CONTENT_H / 2 - th / 2;
+        canvas.fillRoundRect(tx, ty, tw, th, 3, Theme::BG);
+        canvas.drawRoundRect(tx, ty, tw, th, 3, Theme::ERROR);
+        canvas.setTextColor(Theme::ERROR);
+        canvas.setCursor(tx + 8, ty + 5);
+        canvas.print(prompt);
     }
 
     // Toast overlay (drawn on top of everything)
@@ -555,7 +573,7 @@ void SettingsScreen::renderAbout(M5Canvas& canvas) {
 
     int y = y0 + 14;
     canvas.setTextColor(Theme::PRIMARY);
-    canvas.drawString("RatCom v" RATPUTER_VERSION_STRING, 4, y); y += 10;
+    canvas.drawString("RatCom v" RATCOM_VERSION_STRING, 4, y); y += 10;
 
     canvas.setTextColor(Theme::SECONDARY);
     canvas.drawString("M5Stack Cardputer Adv", 4, y); y += 10;
@@ -581,8 +599,31 @@ void SettingsScreen::renderAbout(M5Canvas& canvas) {
 }
 
 bool SettingsScreen::handleKey(const KeyEvent& event) {
-    // ESC always goes back
-    if (event.character == 27) {
+    // Handle confirmation dialog
+    if (_confirmPending) {
+        if (event.character == 'y' || event.character == 'Y') {
+            _confirmPending = false;
+            if (_confirmAction == 0) {
+                factoryReset();
+            } else {
+                if (_sdStore && _sdStore->isReady()) {
+                    if (_sdStore->wipeRatcom()) {
+                        showToast("SD wiped!");
+                    } else {
+                        showToast("Wipe failed");
+                    }
+                    buildSDCardMenu();
+                }
+            }
+        } else {
+            _confirmPending = false;
+            showToast("Cancelled");
+        }
+        return true;
+    }
+
+    // ESC or Delete goes back
+    if (event.character == 27 || (event.del && !_editing)) {
         if (_editing) {
             _editing = false;
             _editField = -1;
@@ -645,7 +686,7 @@ bool SettingsScreen::handleKey(const KeyEvent& event) {
                 case 3: _subMenu = MENU_DISPLAY; buildDisplayMenu(); break;
                 case 4: _subMenu = MENU_AUDIO; buildAudioMenu(); break;
                 case 5: _subMenu = MENU_ABOUT; break;
-                case 6: factoryReset(); break;
+                case 6: _confirmPending = true; _confirmAction = 0; break;
             }
             return true;
         }
@@ -747,12 +788,8 @@ bool SettingsScreen::handleKey(const KeyEvent& event) {
                     return true;
                 }
                 if (sel == 5) {
-                    if (_sdStore->wipeRatcom()) {
-                        showToast("SD wiped!");
-                    } else {
-                        showToast("Wipe failed");
-                    }
-                    buildSDCardMenu();
+                    _confirmPending = true;
+                    _confirmAction = 1;
                     return true;
                 }
             }
@@ -888,14 +925,30 @@ void SettingsScreen::applyRadioPreset(int preset) {
 }
 
 void SettingsScreen::factoryReset() {
-    Serial.println("[SETTINGS] Factory reset!");
+    Serial.println("[SETTINGS] Factory reset — wiping ALL data");
+
+    // 1. Clear ALL NVS namespaces (config, identity, boot counter)
+    {
+        Preferences prefs;
+        if (prefs.begin("ratcom", false)) { prefs.clear(); prefs.end(); }
+        if (prefs.begin("ratcom_cfg", false)) { prefs.clear(); prefs.end(); }
+        if (prefs.begin("ratcom_id", false)) { prefs.clear(); prefs.end(); }
+        Serial.println("[RESET] NVS cleared");
+    }
+
+    // 2. Wipe SD card ratcom directory
+    if (_sdStore && _sdStore->isReady()) {
+        _sdStore->wipeRatcom();
+        Serial.println("[RESET] SD wiped");
+    }
+
+    // 3. Format LittleFS (destroys all flash files)
     if (_flash) {
         _flash->format();
-        // Also wipe SD config if available
-        if (_sdStore && _sdStore->isReady()) {
-            _sdStore->remove(SD_PATH_USER_CONFIG);
-            Serial.println("[SETTINGS] SD config removed");
-        }
-        ESP.restart();
+        Serial.println("[RESET] Flash formatted");
     }
+
+    Serial.println("[RESET] Factory reset complete — rebooting");
+    delay(500);
+    ESP.restart();
 }

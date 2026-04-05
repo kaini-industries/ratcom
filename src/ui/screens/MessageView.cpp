@@ -66,19 +66,7 @@ void MessageView::refreshMessages() {
             line.color = Theme::PRIMARY;
         } else {
             line.text = std::string(ts) + " you> " + msg.content;
-
-            switch (msg.status) {
-                case LXMFStatus::SENT:
-                case LXMFStatus::DELIVERED:
-                    line.color = Theme::PRIMARY;
-                    break;
-                case LXMFStatus::FAILED:
-                    line.color = Theme::ERROR;
-                    break;
-                default:
-                    line.color = Theme::WARNING;
-                    break;
-            }
+            line.color = (msg.status == LXMFStatus::FAILED) ? Theme::ERROR : Theme::PRIMARY;
         }
 
         _chatLines.push_back(line);
@@ -146,13 +134,23 @@ void MessageView::render(M5Canvas& canvas) {
                 if (drawY + Theme::CHAR_H > chatY + chatH) break;
 
                 canvas.setTextColor(cl.color);
-                std::string segment = cl.text.substr(pos, chars);
-                canvas.drawString(segment.c_str(), 2, drawY);
+                // Stack buffer avoids heap allocation per line per frame
+                char segment[48];
+                int segLen = std::min(chars, (int)sizeof(segment) - 1);
+                memcpy(segment, cl.text.c_str() + pos, segLen);
+                segment[segLen] = '\0';
+                canvas.drawString(segment, 2, drawY);
             }
 
             pos += chars;
             currentLine++;
         }
+    }
+
+    // "New message below" indicator when scrolled up
+    if (_hasNewBelow) {
+        canvas.setTextColor(Theme::WARNING);
+        canvas.drawString("[new msg]", Theme::CONTENT_W - 54, chatY + chatH - Theme::CHAR_H);
     }
 
     // Input separator
@@ -166,6 +164,18 @@ void MessageView::render(M5Canvas& canvas) {
 bool MessageView::handleKey(const KeyEvent& event) {
     // Escape = back to messages list
     if (event.character == 27) {
+        if (_backCb) _backCb();
+        return true;
+    }
+
+    // Fn+Delete = back (even when text input is active)
+    if (event.fn && event.del) {
+        if (_backCb) _backCb();
+        return true;
+    }
+
+    // Delete key = back ONLY if text input is empty
+    if (event.del && !event.fn && _input.getText().empty()) {
         if (_backCb) _backCb();
         return true;
     }
@@ -227,18 +237,26 @@ void MessageView::notifyNewMessage(const LXMFMessage& msg) {
         line.color = Theme::PRIMARY;
     } else {
         line.text = std::string(ts) + " you> " + msg.content;
-        line.color = Theme::WARNING;
+        line.color = Theme::PRIMARY;
     }
     _chatLines.push_back(line);
 
-    // Auto-scroll to bottom
+    // Smart auto-scroll: only scroll if user is already at/near bottom
     int maxCharsPerLine = Theme::CONTENT_W / Theme::CHAR_W;
     int totalWrappedLines = 0;
     for (const auto& cl : _chatLines) {
         totalWrappedLines += ((int)cl.text.size() / maxCharsPerLine) + 1;
     }
     int visibleLines = (Theme::CONTENT_H - 24) / Theme::CHAR_H;
-    _scrollOffset = std::max(0, totalWrappedLines - visibleLines);
+    int maxScroll = std::max(0, totalWrappedLines - visibleLines);
+    if (_scrollOffset >= maxScroll - 2) {
+        // User is at/near bottom — auto-scroll
+        _scrollOffset = maxScroll;
+        _hasNewBelow = false;
+    } else {
+        // User is reading history — don't scroll, show indicator
+        _hasNewBelow = true;
+    }
 
     if (msg.incoming && _lxmf) {
         _lxmf->markRead(_peerHex);
@@ -293,10 +311,10 @@ void MessageView::sendCurrentInput() {
 
     ChatLine line;
     line.text = std::string(ts) + " you> " + text;
-    line.color = Theme::WARNING;  // Yellow = queued/pending
+    line.color = Theme::PRIMARY;
     _chatLines.push_back(line);
 
-    // Auto-scroll to bottom
+    // Always scroll to bottom when sending
     int maxCharsPerLine = Theme::CONTENT_W / Theme::CHAR_W;
     int totalWrappedLines = 0;
     for (const auto& cl : _chatLines) {
@@ -304,4 +322,5 @@ void MessageView::sendCurrentInput() {
     }
     int visibleLines = (Theme::CONTENT_H - 24) / Theme::CHAR_H;
     _scrollOffset = std::max(0, totalWrappedLines - visibleLines);
+    _hasNewBelow = false;
 }

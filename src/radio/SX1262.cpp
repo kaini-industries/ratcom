@@ -476,6 +476,13 @@ int SX1262::parsePacket(int size) {
     int packetLength = rxbuf[0];
     _fifo_rx_addr_ptr = rxbuf[1];
 
+    // Validate FIFO length — SX1262 max is 255 bytes
+    if (packetLength < 1 || packetLength > MAX_PACKET_SIZE) {
+        Serial.printf("[SX1262] Invalid FIFO length: %d — resetting RX\n", packetLength);
+        receive();
+        return 0;
+    }
+
     // Read RSSI/SNR before clearing IRQ
     uint8_t pktStat[3] = {0};
     executeOpcodeRead(OP_PACKET_STATUS_6X, pktStat, 3);
