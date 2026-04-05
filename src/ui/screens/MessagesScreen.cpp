@@ -4,8 +4,6 @@
 
 void MessagesScreen::onEnter() {
     _showingContext = false;
-    _enterHeld = false;
-    _enterPressTime = 0;
     refreshList();
 }
 
@@ -53,7 +51,6 @@ void MessagesScreen::showContextMenu(int idx) {
     if (idx < 0 || idx >= (int)_peerHexes.size()) return;
     _contextPeerHex = _peerHexes[idx];
 
-    // Check if this peer is a saved contact
     _contextIsContact = false;
     if (_am) {
         const DiscoveredNode* node = _am->findNodeByHex(_contextPeerHex);
@@ -61,6 +58,7 @@ void MessagesScreen::showContextMenu(int idx) {
     }
 
     _contextList.clear();
+    _contextList.addItem("Message");
     if (!_contextIsContact) {
         _contextList.addItem("Add Contact");
     }
@@ -73,7 +71,10 @@ void MessagesScreen::showContextMenu(int idx) {
 void MessagesScreen::executeContextAction() {
     const std::string& action = _contextList.getSelectedItem();
 
-    if (action == "Add Contact") {
+    if (action == "Message") {
+        exitContextMenu();
+        if (_openCb) _openCb(_contextPeerHex);
+    } else if (action == "Add Contact") {
         if (_addContactCb) _addContactCb(_contextPeerHex);
         exitContextMenu();
     } else if (action == "Delete History") {
@@ -109,11 +110,8 @@ void MessagesScreen::render(M5Canvas& canvas) {
     y += 13;
 
     if (_showingContext) {
-        // Context menu header
         canvas.setTextColor(Theme::PRIMARY);
         canvas.setCursor(4, y);
-
-        // Show peer name
         std::string label;
         if (_am) {
             const DiscoveredNode* node = _am->findNodeByHex(_contextPeerHex);
@@ -127,13 +125,6 @@ void MessagesScreen::render(M5Canvas& canvas) {
 
         _contextList.render(canvas, 0, y, Theme::CONTENT_W, Theme::CONTENT_H - (y - Theme::CONTENT_Y));
     } else {
-        // Long-press hint
-        if (_enterHeld && millis() - _enterPressTime >= LONG_PRESS_MS) {
-            // Show context menu on long press
-            int idx = _list.getSelectedIndex();
-            showContextMenu(idx);
-        }
-
         _list.render(canvas, 0, y, Theme::CONTENT_W, Theme::CONTENT_H - (y - Theme::CONTENT_Y));
     }
 }
@@ -156,32 +147,23 @@ bool MessagesScreen::handleKey(const KeyEvent& event) {
     if (event.character == ';') { _list.scrollUp(); return true; }
     if (event.character == '.') { _list.scrollDown(); return true; }
 
-    // Enter key: track press time for long-press detection
+    // Enter → open conversation immediately
     if (event.enter) {
-        if (_enterPressTime == 0) {
-            _enterPressTime = millis();
-            _enterHeld = true;
-        } else if (millis() - _enterPressTime >= LONG_PRESS_MS) {
-            // Long press — show context menu
-            _enterHeld = false;
-            _enterPressTime = 0;
-            int idx = _list.getSelectedIndex();
-            showContextMenu(idx);
-        } else {
-            // Quick press — open conversation
-            _enterHeld = false;
-            _enterPressTime = 0;
-            int idx = _list.getSelectedIndex();
-            if (idx >= 0 && idx < (int)_peerHexes.size() && _openCb) {
-                _openCb(_peerHexes[idx]);
-            }
+        int idx = _list.getSelectedIndex();
+        if (idx >= 0 && idx < (int)_peerHexes.size() && _openCb) {
+            _openCb(_peerHexes[idx]);
         }
         return true;
     }
 
-    // Reset long-press tracking on any other key
-    _enterHeld = false;
-    _enterPressTime = 0;
+    // Fn+Enter or Delete key → context menu (Message, Add Contact, Delete History)
+    if (event.del) {
+        int idx = _list.getSelectedIndex();
+        if (idx >= 0 && idx < (int)_peerHexes.size()) {
+            showContextMenu(idx);
+        }
+        return true;
+    }
 
     return false;
 }

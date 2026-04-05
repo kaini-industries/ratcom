@@ -42,12 +42,7 @@ private:
     AddContactCb _addContactCb;
     bool _needsRefresh = false;
 
-    // Long-press detection
-    unsigned long _enterPressTime = 0;
-    bool _enterHeld = false;
-    static constexpr unsigned long LONG_PRESS_MS = 500;
-
-    // Context menu
+    // Context menu (triggered by Delete key)
     bool _showingContext = false;
     ScrollList _contextList;
     std::string _contextPeerHex;

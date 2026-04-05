@@ -3,6 +3,8 @@
 #include "config/Config.h"
 #include <algorithm>
 #include <Preferences.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
 
 void SettingsScreen::onEnter() {
     _subMenu = MENU_MAIN;
@@ -158,9 +160,23 @@ void SettingsScreen::addTCPConnection(const std::string& host, uint16_t port) {
     ep.port = port;
     if (ep.host.isEmpty()) return;
 
+    // Test connection before adding (only if WiFi is connected)
+    if (WiFi.status() == WL_CONNECTED) {
+        showToast("Testing connection...");
+        WiFiClient testClient;
+        if (!testClient.connect(ep.host.c_str(), ep.port, 3000)) {
+            testClient.stop();
+            showToast("Connection failed!", 2500);
+            Serial.printf("[TCP] Test failed: %s:%d\n", ep.host.c_str(), ep.port);
+            buildTCPMenu();
+            return;
+        }
+        testClient.stop();
+    }
+
     s.tcpConnections.push_back(ep);
     applyAndSave();
-    showToast("Reboot to connect");
+    showToast("Added! Reboot to connect");
     buildTCPMenu();
 }
 
