@@ -2,13 +2,26 @@
 #include "ui/Theme.h"
 #include "config/Config.h"
 
+struct RadioPresetHome {
+    const char* name;
+    uint8_t sf; uint32_t bw; uint8_t cr; int8_t txPower;
+};
+static const RadioPresetHome HOME_PRESETS[] = {
+    {"Short Turbo",   7,  500000, 5,  14},
+    {"Short Fast",    7,  250000, 5,  14},
+    {"Short Slow",    8,  250000, 5,  14},
+    {"Medium Fast",   9,  250000, 5,  17},
+    {"Medium Slow",   10, 250000, 5,  17},
+    {"Long Turbo",    11, 500000, 8,  22},
+    {"Long Fast",     11, 250000, 5,  22},
+    {"Long Moderate", 11, 125000, 8,  22},
+};
 static const char* detectPresetName(const UserSettings& s) {
-    if (s.loraSF == 9 && s.loraBW == 125000 && s.loraCR == 5 && s.loraTxPower == 17)
-        return "Balanced";
-    if (s.loraSF == 12 && s.loraBW == 62500 && s.loraCR == 8 && s.loraTxPower == 22)
-        return "Long Range";
-    if (s.loraSF == 7 && s.loraBW == 250000 && s.loraCR == 5 && s.loraTxPower == 14)
-        return "Fast";
+    for (int i = 0; i < 8; i++) {
+        if (s.loraSF == HOME_PRESETS[i].sf && s.loraBW == HOME_PRESETS[i].bw
+            && s.loraCR == HOME_PRESETS[i].cr && s.loraTxPower == HOME_PRESETS[i].txPower)
+            return HOME_PRESETS[i].name;
+    }
     return "Custom";
 }
 

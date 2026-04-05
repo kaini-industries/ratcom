@@ -10,3 +10,6 @@ __pycache__
 *.pyc
 .DS_Store
 docs/
+ratcom-firmware/
+ratcom-firmware.zip
+ratcom-merged.bin

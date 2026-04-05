@@ -22,14 +22,34 @@ void SettingsScreen::buildMainMenu() {
     _list.addItem("! Factory Reset");
 }
 
+struct RadioPreset {
+    const char* name;
+    uint8_t sf; uint32_t bw; uint8_t cr; int8_t txPower;
+};
+static const RadioPreset PRESETS[] = {
+    {"Short Turbo",   7,  500000, 5,  14},
+    {"Short Fast",    7,  250000, 5,  14},
+    {"Short Slow",    8,  250000, 5,  14},
+    {"Medium Fast",   9,  250000, 5,  17},
+    {"Medium Slow",   10, 250000, 5,  17},
+    {"Long Turbo",    11, 500000, 8,  22},
+    {"Long Fast",     11, 250000, 5,  22},
+    {"Long Moderate", 11, 125000, 8,  22},
+};
+static constexpr int NUM_PRESETS = 8;
+
+static int detectPresetIndex(const UserSettings& s) {
+    for (int i = 0; i < NUM_PRESETS; i++) {
+        if (s.loraSF == PRESETS[i].sf && s.loraBW == PRESETS[i].bw
+            && s.loraCR == PRESETS[i].cr && s.loraTxPower == PRESETS[i].txPower)
+            return i;
+    }
+    return -1;
+}
+
 static const char* detectPresetName(const UserSettings& s) {
-    if (s.loraSF == 9 && s.loraBW == 125000 && s.loraCR == 5 && s.loraTxPower == 17)
-        return "Balanced";
-    if (s.loraSF == 12 && s.loraBW == 62500 && s.loraCR == 8 && s.loraTxPower == 22)
-        return "Long Range";
-    if (s.loraSF == 7 && s.loraBW == 250000 && s.loraCR == 5 && s.loraTxPower == 14)
-        return "Fast";
-    return "Custom";
+    int idx = detectPresetIndex(s);
+    return idx >= 0 ? PRESETS[idx].name : "Custom";
 }
 
 void SettingsScreen::buildRadioMenu() {
@@ -42,12 +62,16 @@ void SettingsScreen::buildRadioMenu() {
     snprintf(buf, sizeof(buf), "Active: %s", detectPresetName(s));
     _list.addItem(buf);
 
-    // Presets (items 1-3)
-    _list.addItem("[Balanced: SF9/125k]");
-    _list.addItem("[Long Range: SF12/62.5k]");
-    _list.addItem("[Fast: SF7/250k]");
+    // Presets (items 1..NUM_PRESETS)
+    int activeIdx = detectPresetIndex(s);
+    for (int i = 0; i < NUM_PRESETS; i++) {
+        char label[40];
+        snprintf(label, sizeof(label), "%s[%s]",
+                 (i == activeIdx) ? ">" : " ", PRESETS[i].name);
+        _list.addItem(label, (i == activeIdx) ? Theme::PRIMARY : 0);
+    }
 
-    // Editable fields (items 4-8)
+    // Editable fields (items NUM_PRESETS+1 .. NUM_PRESETS+5)
     snprintf(buf, sizeof(buf), "Frequency: %lu Hz", (unsigned long)s.loraFrequency);
     _list.addItem(buf);
     snprintf(buf, sizeof(buf), "SF: %d", s.loraSF);
@@ -721,8 +745,8 @@ bool SettingsScreen::handleKey(const KeyEvent& event) {
             return true;
         }
 
-        // Handle radio presets (items 1-3; item 0 is the "Active:" label)
-        if (_subMenu == MENU_RADIO && sel >= 1 && sel <= 3) {
+        // Handle radio presets (items 1..NUM_PRESETS; item 0 is the "Active:" label)
+        if (_subMenu == MENU_RADIO && sel >= 1 && sel <= NUM_PRESETS) {
             applyRadioPreset(sel - 1);
             return true;
         }
@@ -821,9 +845,9 @@ bool SettingsScreen::handleKey(const KeyEvent& event) {
             return true;  // Back handled above
         }
 
-        // Edit the selected field (offset by 4 for radio header+presets, 1 for WiFi mode)
+        // Edit the selected field (offset by 1+NUM_PRESETS for radio header+presets, 1 for WiFi mode)
         int fieldIdx = sel;
-        if (_subMenu == MENU_RADIO) fieldIdx -= 4;
+        if (_subMenu == MENU_RADIO) fieldIdx -= (1 + NUM_PRESETS);
         if (_subMenu == MENU_WIFI) fieldIdx -= 1;
         std::string currentVal = getCurrentValue(_subMenu, fieldIdx);
         startEditing(fieldIdx, currentVal);
@@ -878,29 +902,16 @@ void SettingsScreen::applyAndSave() {
 }
 
 void SettingsScreen::applyRadioPreset(int preset) {
-    if (!_config) return;
+    if (!_config || preset < 0 || preset >= NUM_PRESETS) return;
     auto& s = _config->settings();
 
-    switch (preset) {
-        case 0:  // Balanced — SF9, BW125k, CR5, TX17
-            s.loraSF = 9;
-            s.loraBW = 125000;
-            s.loraCR = 5;
-            s.loraTxPower = 17;
-            break;
-        case 1:  // Long Range — SF12, BW62.5k, CR8, TX22
-            s.loraSF = 12;
-            s.loraBW = 62500;
-            s.loraCR = 8;
-            s.loraTxPower = 22;
-            break;
-        case 2:  // Fast — SF7, BW250k, CR5, TX14
-            s.loraSF = 7;
-            s.loraBW = 250000;
-            s.loraCR = 5;
-            s.loraTxPower = 14;
-            break;
-    }
+    const auto& p = PRESETS[preset];
+    s.loraSF = p.sf;
+    s.loraBW = p.bw;
+    s.loraCR = p.cr;
+    s.loraTxPower = p.txPower;
+    // Set frequency to current region default
+    s.loraFrequency = REGION_FREQ[constrain(s.radioRegion, 0, REGION_COUNT - 1)];
 
     applyAndSave();
     buildRadioMenu();

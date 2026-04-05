@@ -693,9 +693,21 @@ void setup() {
 #if HAS_GPS
         if (gps.isRunning()) gps.setPosixTZ(TIMEZONE_TABLE[tzIdx].posixTZ);
 #endif
+
+        // Auto-set radio region + frequency from timezone
+        uint8_t tzRegion = TIMEZONE_TABLE[tzIdx].radioRegion;
+        userConfig.settings().radioRegion = tzRegion;
+        userConfig.settings().loraFrequency = REGION_FREQ[tzRegion];
+        // Apply to hardware immediately
+        if (radioOnline) {
+            radio.setFrequency(REGION_FREQ[tzRegion]);
+            radio.receive();
+        }
+        Serial.printf("[BOOT] Timezone set: %s (UTC%+d), radio region: %s (%lu MHz)\n",
+                      TIMEZONE_TABLE[tzIdx].label, TIMEZONE_TABLE[tzIdx].baseOffset,
+                      REGION_LABELS[tzRegion], (unsigned long)(REGION_FREQ[tzRegion] / 1000000));
+
         saveConfig();
-        Serial.printf("[BOOT] Timezone set: %s (UTC%+d)\n",
-                      TIMEZONE_TABLE[tzIdx].label, TIMEZONE_TABLE[tzIdx].baseOffset);
 
         // If no display name yet, go to name input next
         if (userConfig.settings().displayName.isEmpty()) {
