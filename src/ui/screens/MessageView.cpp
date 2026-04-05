@@ -206,14 +206,16 @@ void MessageView::notifyNewMessage(const LXMFMessage& msg) {
         match = (senderHex.substr(0, _peerHex.size()) == _peerHex);
     }
 
+    // Always store in pending for merge on next refreshMessages()
+    // This ensures messages survive the async write delay
+    _pendingMessages[senderHex].push_back(msg);
+
     if (!match) {
-        // Store for later merge when this conversation is opened
-        _pendingMessages[senderHex].push_back(msg);
         _needsRefresh = true;
         return;
     }
 
-    // Add directly to chat lines (don't wait for async disk write)
+    // Add directly to chat lines for real-time display
     ChatLine line;
     char ts[16];
     double tsVal = msg.timestamp;
@@ -299,7 +301,19 @@ void MessageView::sendCurrentInput() {
     _lxmf->sendMessage(destHash, text);
     _input.clear();
 
-    // Add sent message to display immediately (async save hasn't hit disk yet)
+    // Store outgoing message in pending so it survives refresh before disk write completes
+    {
+        LXMFMessage pending;
+        pending.destHash = destHash;
+        pending.sourceHash = _lxmf->getSourceHash();
+        pending.content = text;
+        pending.timestamp = (time(nullptr) > 1700000000) ? (double)time(nullptr) : millis() / 1000.0;
+        pending.incoming = false;
+        pending.status = LXMFStatus::QUEUED;
+        _pendingMessages[_peerHex].push_back(pending);
+    }
+
+    // Add sent message to display immediately
     char ts[16];
     time_t now = time(nullptr);
     if (now > 1700000000) {

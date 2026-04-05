@@ -63,6 +63,16 @@ bool WriteQueue::enqueue(const char* path, const String& data, WriteBackend back
     return enqueue(path, path, data, backend);
 }
 
+void WriteQueue::waitForFlush(unsigned long timeoutMs) {
+    unsigned long start = millis();
+    while (_pending > 0 && (millis() - start) < timeoutMs) {
+        delay(5);  // Yield to let WriteQueue task process
+    }
+    if (_pending > 0) {
+        Serial.printf("[WRITEQ] Flush timeout (%d pending)\n", (int)_pending);
+    }
+}
+
 bool WriteQueue::isFull() const {
     if (!_queue) return true;
     return uxQueueSpacesAvailable(_queue) == 0;

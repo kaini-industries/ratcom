@@ -31,6 +31,7 @@ public:
 
     int drainCount() const { return _pending; }
     bool isFull() const;
+    void waitForFlush(unsigned long timeoutMs = 200);  // Block until queue is empty or timeout
 
     // Set a counter value to be periodically persisted to NVS
     void setCounterRef(std::atomic<uint32_t>* counter) { _counterRef = counter; }

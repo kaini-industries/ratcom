@@ -92,6 +92,7 @@ Screen* tabScreens[4] = {nullptr, nullptr, nullptr, nullptr};
 // --- State ---
 bool radioOnline = false;
 bool bootComplete = false;
+volatile bool pendingMessageSound = false;  // Deferred audio from packet callback
 bool bootLoopRecovery = false;
 bool wifiSTAStarted = false;
 bool wifiSTAConnected = false;
@@ -439,13 +440,15 @@ void setup() {
     messageStore.begin(&flash, &sdStore);
     lxmf.begin(&rns, &messageStore);
     lxmf.setMessageCallback([](const LXMFMessage& msg) {
+        // This runs in the packet callback context — MUST be non-blocking.
+        // No disk I/O, no delays, no heavy computation.
         Serial.printf("[LXMF] New message from %s\n", msg.sourceHash.toHex().substr(0, 8).c_str());
         ui.tabBar().setUnreadCount(TabBar::TAB_MSGS, lxmf.unreadCount());
         ui.markContentDirty();
         ui.markTabDirty();
         messagesScreen.notifyNewMessage();
         messageView.notifyNewMessage(msg);
-        audio.playMessage();
+        pendingMessageSound = true;  // Played from main loop — delay() in callback blocks transport
     });
 
     // Status callback — update UI when send completes (SENT/FAILED)
@@ -813,8 +816,14 @@ void loop() {
         rnsDuration = millis() - rnsStart;
     }
 
-    // 3. LXMF outgoing queue (every loop — cheap if empty)
-    lxmf.loop();
+    // 3. LXMF queue processing (incoming + outgoing, throttled)
+    {
+        static unsigned long lastLxmf = 0;
+        if (now - lastLxmf >= 100) {  // 10 Hz max — prevents main loop starvation
+            lastLxmf = now;
+            lxmf.loop();
+        }
+    }
 
     // 4. Auto-announce (2 minutes)
     if (bootComplete && now - lastAutoAnnounce >= ANNOUNCE_INTERVAL_MS) {
@@ -892,7 +901,13 @@ void loop() {
     if (gps.isRunning()) gps.loop();
 #endif
 
-    // 9. Power management
+    // 9. Deferred audio (from packet callbacks — delay() can't run in callbacks)
+    if (pendingMessageSound) {
+        pendingMessageSound = false;
+        audio.playMessage();
+    }
+
+    // 10. Power management
     power.loop();
 
     // 9. Power-aware RNS throttle

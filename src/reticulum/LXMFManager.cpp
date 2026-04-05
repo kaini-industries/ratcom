@@ -15,11 +15,38 @@ bool LXMFManager::begin(ReticulumManager* rns, MessageStore* store) {
     dest.set_packet_callback(onPacketReceived);
     dest.set_link_established_callback(onLinkEstablished);
 
+    // Pre-compute unread counts at boot — NEVER do this lazily in callbacks
+    computeUnreadFromDisk();
+
     Serial.println("[LXMF] Manager started");
     return true;
 }
 
 void LXMFManager::loop() {
+    // Process incoming messages queued by packet callbacks (safe context — main loop)
+    while (!_incomingQueue.empty()) {
+        LXMFMessage msg = std::move(_incomingQueue.front());
+        _incomingQueue.erase(_incomingQueue.begin());
+
+        Serial.printf("[LXMF] Processing: from %s \"%s\"\n",
+                      msg.sourceHash.toHex().substr(0, 8).c_str(),
+                      msg.content.c_str());
+
+        // Store to disk (takes mutex — safe here in main loop)
+        if (_store) {
+            _store->saveMessage(msg);
+        }
+
+        // Track unread
+        std::string peerHex = msg.sourceHash.toHex();
+        _unread[peerHex]++;
+
+        // Notify UI
+        if (_onMessage) {
+            _onMessage(msg);
+        }
+    }
+
     if (_outQueue.empty()) return;
     unsigned long now = millis();
     int processed = 0;
@@ -289,6 +316,9 @@ void LXMFManager::onLinkEstablished(RNS::Link& link) {
 }
 
 void LXMFManager::processIncoming(const uint8_t* data, size_t len, const RNS::Bytes& destHash) {
+    // This runs in the packet callback context — MUST be non-blocking.
+    // Only unpack and dedup here, defer storage/UI to loop().
+
     LXMFMessage msg;
     if (!LXMFMessage::unpackFull(data, len, msg)) {
         Serial.println("[LXMF] Failed to unpack message");
@@ -297,15 +327,12 @@ void LXMFManager::processIncoming(const uint8_t* data, size_t len, const RNS::By
 
     // Drop self-messages (loopback from Transport)
     if (_rns && msg.sourceHash == _rns->destination().hash()) {
-        Serial.println("[LXMF] Dropping loopback self-message");
         return;
     }
 
-    // Deduplication: skip messages we've already processed
+    // Deduplication
     std::string msgIdHex = msg.messageId.toHex();
     if (_seenMessageIds.count(msgIdHex)) {
-        Serial.printf("[LXMF] Duplicate message from %s (already seen)\n",
-                      msg.sourceHash.toHex().substr(0, 8).c_str());
         return;
     }
     _seenMessageIds.insert(msgIdHex);
@@ -313,39 +340,22 @@ void LXMFManager::processIncoming(const uint8_t* data, size_t len, const RNS::By
         _seenMessageIds.erase(_seenMessageIds.begin());
     }
 
-    // Only overwrite destHash if caller provided a real one (non-link delivery).
-    // For link delivery, unpackFull already parsed the correct destHash from the payload.
     if (destHash.size() > 0) {
         msg.destHash = destHash;
     }
 
-    // Stamp with receiver's local time if sender's timestamp is missing/invalid
     if (msg.timestamp < 1700000000) {
         time_t now = time(nullptr);
         if (now > 1700000000) msg.timestamp = (double)now;
     }
 
-    Serial.printf("[LXMF] From %s: \"%s\"\n",
-                  msg.sourceHash.toHex().substr(0, 8).c_str(),
-                  msg.content.c_str());
-
-    // Log back-pressure status
-    if (_store && _store->writeQueue().isFull()) {
-        Serial.println("[LXMF] WARNING: Write queue full (back-pressure)");
-    }
-
-    // Store message (async via WriteQueue)
-    if (_store) {
-        _store->saveMessage(msg);
-    }
-
-    // Track unread
-    std::string peerHex = msg.sourceHash.toHex();
-    _unread[peerHex]++;
-
-    // Notify callback
-    if (_onMessage) {
-        _onMessage(msg);
+    // Queue for processing in loop() — no I/O, no mutex, no callbacks here
+    if ((int)_incomingQueue.size() < MAX_INCOMING_QUEUE) {
+        _incomingQueue.push_back(msg);
+        Serial.printf("[LXMF] Queued incoming from %s\n",
+                      msg.sourceHash.toHex().substr(0, 8).c_str());
+    } else {
+        Serial.println("[LXMF] Incoming queue full, dropping message");
     }
 }
 
@@ -361,9 +371,8 @@ std::vector<LXMFMessage> LXMFManager::getMessages(const std::string& peerHex, in
 }
 
 int LXMFManager::unreadCount(const std::string& peerHex) const {
-    if (!_unreadComputed) {
-        const_cast<LXMFManager*>(this)->computeUnreadFromDisk();
-    }
+    // Never do lazy disk I/O here — this is called from packet callbacks.
+    // Unread counts are pre-computed at boot and updated incrementally.
     if (peerHex.empty()) {
         int total = 0;
         for (auto& kv : _unread) total += kv.second;

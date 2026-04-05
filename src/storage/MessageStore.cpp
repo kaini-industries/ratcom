@@ -426,17 +426,12 @@ bool MessageStore::saveMessage(const LXMFMessage& msg) {
     String sdPath = sdConversationDir(peerHex) + "/" + filename;
     String flashPath = conversationDir(peerHex) + "/" + filename;
 
-    // Write flash SYNCHRONOUSLY — ensures message is on disk before returning
-    // Flash writes take 10-50ms, acceptable for message frequency
-    bool flashOk = _flash->writeDirect(flashPath.c_str(),
-        (const uint8_t*)json.c_str(), json.length());
-    if (!flashOk) {
-        Serial.printf("[MSGSTORE] WARN: flash write failed: %s\n", flashPath.c_str());
-    }
-
-    // SD write stays async (50-200ms, non-critical backup)
+    // Enqueue to WriteQueue — non-blocking (safe from packet callbacks)
+    // Flash is written first in processJob, SD second
     if (_sd && _sd->isReady()) {
-        _writeQueue.enqueue(sdPath.c_str(), json, WriteBackend::SD_ONLY);
+        _writeQueue.enqueue(sdPath.c_str(), flashPath.c_str(), json, WriteBackend::BOTH);
+    } else {
+        _writeQueue.enqueue(nullptr, flashPath.c_str(), json, WriteBackend::FLASH_ONLY);
     }
 
     // Add to conversation list if new
@@ -667,13 +662,11 @@ void MessageStore::markConversationRead(const std::string& peerHex) {
     String sdPath = sdConversationDir(peerHex) + "/.read_ctr";
     String flashPath = conversationDir(peerHex) + "/.read_ctr";
 
-    // Write flash synchronously (tiny file, <1ms)
-    _flash->writeDirect(flashPath.c_str(),
-        (const uint8_t*)counterStr.c_str(), counterStr.length());
-
-    // SD async
+    // Enqueue both writes — non-blocking
     if (_sd && _sd->isReady()) {
-        _writeQueue.enqueue(sdPath.c_str(), counterStr, WriteBackend::SD_ONLY);
+        _writeQueue.enqueue(sdPath.c_str(), flashPath.c_str(), counterStr, WriteBackend::BOTH);
+    } else {
+        _writeQueue.enqueue(nullptr, flashPath.c_str(), counterStr, WriteBackend::FLASH_ONLY);
     }
 }
 

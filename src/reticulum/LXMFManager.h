@@ -28,6 +28,9 @@ public:
     // Status callback (fires when send completes with SENT/FAILED)
     void setStatusCallback(StatusCallback cb) { _statusCb = cb; }
 
+    // Source hash (our LXMF destination hash)
+    RNS::Bytes getSourceHash() const { return _rns ? _rns->destination().hash() : RNS::Bytes(); }
+
     // Queue info
     int queuedCount() const { return _outQueue.size(); }
 
@@ -76,6 +79,10 @@ private:
     // Deduplication: recently seen message IDs
     std::set<std::string> _seenMessageIds;
     static constexpr int MAX_SEEN_IDS = 100;
+
+    // Incoming message queue — packet callbacks push here, loop() processes
+    std::vector<LXMFMessage> _incomingQueue;
+    static constexpr int MAX_INCOMING_QUEUE = 8;
 
     static LXMFManager* _instance;
 };
