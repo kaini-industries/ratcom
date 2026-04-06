@@ -19,20 +19,35 @@ void MessageView::refreshMessages() {
     // Load last 20 messages (paginated)
     _messages = _lxmf->getMessages(_peerHex);
 
-    // Merge any pending messages not yet flushed to disk
+    // Merge any pending messages not yet flushed to disk.
+    // Only remove pending entries that were confirmed written (found in disk load).
+    // This prevents messages from vanishing if the WriteQueue hasn't flushed yet.
     auto pendIt = _pendingMessages.find(_peerHex);
     if (pendIt != _pendingMessages.end()) {
-        for (const auto& pending : pendIt->second) {
-            bool found = false;
-            for (const auto& loaded : _messages) {
+        auto& pendings = pendIt->second;
+        // _messages currently holds only disk-loaded messages (from getMessages above).
+        // Check each pending against disk; add if missing, mark confirmed if found.
+        const auto diskMessages = _messages;  // snapshot before merge
+        for (const auto& pending : pendings) {
+            bool onDisk = false;
+            for (const auto& loaded : diskMessages) {
                 if (loaded.timestamp == pending.timestamp &&
                     loaded.sourceHash == pending.sourceHash) {
-                    found = true; break;
+                    onDisk = true; break;
                 }
             }
-            if (!found) _messages.push_back(pending);
+            if (!onDisk) _messages.push_back(pending);
         }
-        _pendingMessages.erase(pendIt);
+        // Remove only confirmed (on-disk) pending entries; keep unwritten ones
+        pendings.erase(std::remove_if(pendings.begin(), pendings.end(),
+            [&diskMessages](const LXMFMessage& pending) {
+                for (const auto& loaded : diskMessages) {
+                    if (loaded.timestamp == pending.timestamp &&
+                        loaded.sourceHash == pending.sourceHash) return true;
+                }
+                return false;
+            }), pendings.end());
+        if (pendings.empty()) _pendingMessages.erase(pendIt);
     }
 
     _lxmf->markRead(_peerHex);
