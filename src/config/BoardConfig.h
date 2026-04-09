@@ -22,7 +22,7 @@
 #define LORA_HAS_TCXO           true
 #define LORA_DIO2_AS_RF_SWITCH  true
 #define LORA_TCXO_VOLTAGE       0x06   // MODE_TCXO_3_0V_6X — proven on Cap LoRa-1262
-#define LORA_DEFAULT_FREQ       914875000  // Reticulum community standard (Americas)
+#define LORA_DEFAULT_FREQ       915000000  // Reticulum default (Americas)
 #define LORA_DEFAULT_BW         125000     // 125 kHz — Reticulum standard
 #define LORA_DEFAULT_SF         8          // SF8 — Reticulum standard
 #define LORA_DEFAULT_CR         5
