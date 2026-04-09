@@ -98,6 +98,7 @@ void LoRaInterface::transmitNow(const RNS::Bytes& data) {
     }
 
     _txPending = true;
+    _txStartMs = millis();
     _txData = data;
     InterfaceImpl::handle_outgoing(data);
 
@@ -123,6 +124,15 @@ void LoRaInterface::loop() {
 
     // Handle async TX completion
     if (_txPending) {
+        if (millis() - _txStartMs > TX_TIMEOUT_MS) {
+            Serial.println("[LORA_IF] TX TIMEOUT — radio stuck, forcing recovery");
+            _txPending = false;
+            _splitTxPending = false;
+            _splitTxRemaining = RNS::Bytes();
+            _txData = RNS::Bytes();
+            _radio->receive();
+            return;
+        }
         if (!_radio->isTxBusy()) {
             _txPending = false;
 
@@ -139,9 +149,10 @@ void LoRaInterface::loop() {
                 _radio->endPacket(true);
 
                 _txPending = true;
+                size_t frame2Len = _splitTxRemaining.size();
                 _splitTxRemaining = RNS::Bytes();
 
-                float airtimeMs = _radio->getAirtime(_splitTxRemaining.size() + RNODE_HEADER_L);
+                float airtimeMs = _radio->getAirtime(frame2Len + RNODE_HEADER_L);
                 _airtimeAccumMs += airtimeMs;
                 return;
             }

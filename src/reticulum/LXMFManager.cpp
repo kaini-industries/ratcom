@@ -95,6 +95,12 @@ bool LXMFManager::sendMessage(const RNS::Bytes& destHash, const std::string& con
     if ((int)_outQueue.size() >= RATCOM_MAX_OUTQUEUE) {
         Serial.printf("[LXMF] WARNING: Outgoing queue full (%d), dropping oldest\n",
                       (int)_outQueue.size());
+        LXMFMessage& dropped = _outQueue.front();
+        dropped.status = LXMFStatus::FAILED;
+        if (_statusCb) {
+            std::string peerHex = dropped.destHash.toHex();
+            _statusCb(peerHex, dropped.timestamp, dropped.status);
+        }
         _outQueue.pop_front();
     }
 

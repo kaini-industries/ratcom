@@ -30,6 +30,8 @@ private:
 
     SX1262* _radio;
     bool _txPending = false;
+    unsigned long _txStartMs = 0;
+    static constexpr unsigned long TX_TIMEOUT_MS = 10000;  // 10s — recover from radio hang
     RNS::Bytes _txData;
 
     // TX queue: buffer packets when radio is busy instead of dropping

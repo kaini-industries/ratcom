@@ -41,6 +41,7 @@
 #include <list>
 #include <esp_system.h>
 #include <freertos/task.h>
+#include <sys/time.h>
 
 SET_LOOP_TASK_STACK_SIZE(16384);  // 16KB — needed for Ed25519 crypto in RNS boot
 
@@ -116,6 +117,30 @@ constexpr unsigned long TCP_GLOBAL_BUDGET_MS = 12;      // Max cumulative TCP ti
 
 // Power-aware RNS interval
 unsigned long rnsInterval = RNS_INTERVAL_MS;
+
+// =============================================================================
+// Early time restoration — set system clock BEFORE Reticulum starts
+// Without a valid epoch time, announce emission timestamps use uptime (~0),
+// which Python Reticulum rejects as stale on path refresh.
+// This runs independently of GPS hardware — uses NVS-persisted epoch.
+// =============================================================================
+
+static void restoreTimeFromNVS() {
+    Preferences prefs;
+    if (!prefs.begin("gps", true)) return;  // Same NVS namespace as GPSManager
+    int64_t storedEpoch = prefs.getLong64("epoch", 0);
+    prefs.end();
+
+    if (storedEpoch > 1700000000) {
+        struct timeval tv = {};
+        tv.tv_sec = (time_t)storedEpoch;
+        tv.tv_usec = 0;
+        settimeofday(&tv, nullptr);
+        Serial.printf("[TIME] Restored from NVS: epoch=%lld (approximate)\n", (long long)storedEpoch);
+    } else {
+        Serial.println("[TIME] No valid time in NVS — announces will use uptime timestamps until NTP/GPS sync");
+    }
+}
 
 // =============================================================================
 // TCP client management — stop old clients, create new from config
@@ -221,6 +246,9 @@ void onHotkeyDiag() {
     Serial.printf("Flash: used/total (see heartbeat for heap)\n");
     Serial.printf("WriteQ pending: %d\n", messageStore.writeQueue().drainCount());
     Serial.printf("Uptime: %lu s\n", millis() / 1000);
+    time_t diagNow = time(nullptr);
+    Serial.printf("System time: %ld (%s)\n", (long)diagNow,
+        diagNow > 1700000000 ? "epoch OK" : "NO EPOCH — announce interop risk");
     Serial.println("=======================");
 }
 
@@ -290,9 +318,13 @@ static RNS::Bytes encodeAnnounceName(const String& name) {
 
 static void announceWithName(bool silent) {
     RNS::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
-    Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes silent=%s\n",
+    time_t now = time(nullptr);
+    bool hasEpoch = (now > 1700000000);
+    Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes silent=%s epoch=%s (t=%ld)\n",
         userConfig.settings().displayName.c_str(), (int)appData.size(),
-        silent ? "yes" : "no");
+        silent ? "yes" : "no",
+        hasEpoch ? "YES" : "NO (uptime — interop risk)",
+        (long)now);
     rns.announce(appData);
     if (!silent) {
         ui.statusBar().flashAnnounce();
@@ -399,7 +431,7 @@ void setup() {
         radio.receive();
         radioOnline = true;
         ui.statusBar().setLoRaOnline(true);
-        Serial.println("[RADIO] SX1262 online at 915 MHz");
+        Serial.printf("[RADIO] SX1262 online at %.3f MHz\n", LORA_DEFAULT_FREQ / 1e6);
         bootScreen.setProgress(0.6f, "Radio online");
     } else {
         Serial.println("[RADIO] SX1262 not detected!");
@@ -420,6 +452,12 @@ void setup() {
         bootScreen.setProgress(0.68f, "No SD card");
     }
     ui.render();
+
+    // Restore last-known time from NVS BEFORE Reticulum starts.
+    // Critical for interop: announce emission timestamps must use Unix epoch,
+    // not uptime. Without this, Python Reticulum nodes reject re-announces
+    // as stale when comparing uptime (~seconds) against cached epoch timestamps.
+    restoreTimeFromNVS();
 
     // Initialize Reticulum
     bootScreen.setProgress(0.7f, "Starting Reticulum...");
@@ -506,9 +544,16 @@ void setup() {
         radio.setCodingRate4(s.loraCR);
         radio.setTxPower(s.loraTxPower);
         radio.receive();
-        Serial.printf("[BOOT] Radio configured: %lu Hz, SF%d, BW%lu, CR4/%d, %d dBm\n",
-                      (unsigned long)s.loraFrequency, s.loraSF,
-                      (unsigned long)s.loraBW, s.loraCR, s.loraTxPower);
+        // Log in Reticulum-compatible format for easy interop debugging.
+        // To connect an RNode, match these values in the host's Reticulum config.
+        Serial.println("[RADIO] ┌─ LoRa Configuration (match on RNode host) ─┐");
+        Serial.printf( "[RADIO] │  frequency       = %lu\n", (unsigned long)s.loraFrequency);
+        Serial.printf( "[RADIO] │  bandwidth       = %lu\n", (unsigned long)s.loraBW);
+        Serial.printf( "[RADIO] │  spreadingfactor = %d\n",  s.loraSF);
+        Serial.printf( "[RADIO] │  codingrate      = %d\n",  s.loraCR);
+        Serial.printf( "[RADIO] │  txpower         = %d\n",  s.loraTxPower);
+        Serial.printf( "[RADIO] │  preamble        = %d  syncword = 0x1424\n", LORA_DEFAULT_PREAMBLE);
+        Serial.println("[RADIO] └──────────────────────────────────────────────┘");
     }
 
     // Mode-based WiFi startup

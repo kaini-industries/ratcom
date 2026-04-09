@@ -82,7 +82,7 @@ private:
 
     // Incoming message queue — packet callbacks push here, loop() processes
     std::vector<LXMFMessage> _incomingQueue;
-    static constexpr int MAX_INCOMING_QUEUE = 8;
+    static constexpr int MAX_INCOMING_QUEUE = 16;
 
     static LXMFManager* _instance;
 };

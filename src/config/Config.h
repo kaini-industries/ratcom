@@ -72,7 +72,7 @@ enum RadioRegion : uint8_t {
 };
 
 static constexpr uint32_t REGION_FREQ[REGION_COUNT] = {
-    915000000, 868000000, 915000000, 923000000
+    914875000, 868000000, 914875000, 923000000
 };
 
 static const char* const REGION_LABELS[REGION_COUNT] = {

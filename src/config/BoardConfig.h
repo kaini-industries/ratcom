@@ -2,6 +2,9 @@
 
 // =============================================================================
 // RatCom — M5Stack Cardputer Adv + Cap LoRa-1262 Pin Definitions
+//
+// NOTE: Requires M5Stack Cardputer Adv (TCA8418 I2C keyboard, ST7789V2 240x135).
+//       The original Cardputer (resistive matrix keyboard) is NOT supported.
 // =============================================================================
 
 // --- SX1262 LoRa Radio (Custom SPI — HSPI) ---
@@ -19,11 +22,11 @@
 #define LORA_HAS_TCXO           true
 #define LORA_DIO2_AS_RF_SWITCH  true
 #define LORA_TCXO_VOLTAGE       0x06   // MODE_TCXO_3_0V_6X — proven on Cap LoRa-1262
-#define LORA_DEFAULT_FREQ       915000000
-#define LORA_DEFAULT_BW         250000   // Long Fast preset (matches Ratdeck)
-#define LORA_DEFAULT_SF         11
+#define LORA_DEFAULT_FREQ       914875000  // Reticulum community standard (Americas)
+#define LORA_DEFAULT_BW         125000     // 125 kHz — Reticulum standard
+#define LORA_DEFAULT_SF         8          // SF8 — Reticulum standard
 #define LORA_DEFAULT_CR         5
-#define LORA_DEFAULT_TX_POWER   22       // Long Fast preset
+#define LORA_DEFAULT_TX_POWER   22         // SX1262 max
 #define LORA_DEFAULT_PREAMBLE   18
 
 // --- Keyboard (TCA8418 via I2C) ---

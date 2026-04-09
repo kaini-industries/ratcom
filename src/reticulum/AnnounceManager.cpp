@@ -247,6 +247,10 @@ void AnnounceManager::received_announce(
             _contactsDirty = true;
             if (!name.empty()) {
                 std::string destHex = destination_hash.toHex();
+                if ((int)_nameCache.size() >= MAX_NAME_CACHE && _nameCache.find(destHex) == _nameCache.end()) {
+                    // Evict first (oldest insertion order in std::map = lexicographic, acceptable)
+                    _nameCache.erase(_nameCache.begin());
+                }
                 _nameCache[destHex] = name;
                 _nameCacheDirty = true;
             }
@@ -359,6 +363,9 @@ void AnnounceManager::saveNode(const std::string& hexHash) {
         saveContact(node);
         // Always persist contact name to name cache
         if (!node.name.empty()) {
+            if ((int)_nameCache.size() >= MAX_NAME_CACHE && _nameCache.find(hexHash) == _nameCache.end()) {
+                _nameCache.erase(_nameCache.begin());
+            }
             _nameCache[hexHash] = node.name;
             _nameCacheDirty = true;
         }

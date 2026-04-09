@@ -45,7 +45,7 @@ private:
     TaskHandle_t _task = nullptr;
     SDStore* _sd = nullptr;
     FlashStore* _flash = nullptr;
-    volatile int _pending = 0;
+    std::atomic<int> _pending{0};
     unsigned long _lastMaintenance = 0;
     std::atomic<uint32_t>* _counterRef = nullptr;
     uint32_t _lastPersistedCounter = 0;

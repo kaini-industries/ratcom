@@ -49,7 +49,7 @@ bool WriteQueue::enqueue(const char* sdPath, const char* flashPath, const String
         return false;
     }
 
-    _pending++;
+    _pending.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
@@ -86,7 +86,8 @@ void WriteQueue::taskFunc(void* param) {
         if (xQueueReceive(self->_queue, &job, pdMS_TO_TICKS(1000)) == pdTRUE) {
             self->processJob(*job);
             delete job;
-            if (self->_pending > 0) self->_pending--;
+            if (self->_pending.load(std::memory_order_relaxed) > 0)
+                self->_pending.fetch_sub(1, std::memory_order_relaxed);
         }
 
         // Periodic maintenance (NVS counter persist)
