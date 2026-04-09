@@ -9,3 +9,5 @@ docs/
 ratcom-firmware/
 ratcom-firmware.zip
 ratcom-merged.bin
+.env
+.claude

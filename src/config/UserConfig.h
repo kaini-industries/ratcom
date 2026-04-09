@@ -75,4 +75,5 @@ private:
     String serializeToJson() const;
 
     UserSettings _settings;
+    bool _migrationDirty = false;  // Set by parseJson when a migration modifies settings
 };

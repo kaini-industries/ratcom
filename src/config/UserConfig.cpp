@@ -88,6 +88,15 @@ bool UserConfig::parseJson(const String& json) {
     _settings.gpsLocationEnabled = doc["gps_loc"] | false;
     _settings.displayName = doc["display_name"] | "";
 
+    // One-time migration: fix old 914.875 MHz default → 915.000 MHz (Reticulum standard).
+    // Devices that booted before v1.7.9 persisted 914875000, which is 125 kHz off from
+    // the standard Reticulum frequency and prevents interop with RNodes.
+    if (_settings.loraFrequency == 914875000) {
+        _settings.loraFrequency = 915000000;
+        Serial.println("[CONFIG] Migrated frequency 914875000 → 915000000 (Reticulum standard)");
+        _migrationDirty = true;
+    }
+
     Serial.printf("[CONFIG] Loaded: wifi_mode=%d ssid='%s' name='%s'\n",
                   (int)_settings.wifiMode,
                   _settings.wifiSTASSID.c_str(),
@@ -143,15 +152,23 @@ String UserConfig::serializeToJson() const {
 // ---------------------------------------------------------------------------
 
 bool UserConfig::load(FlashStore& flash) {
+    _migrationDirty = false;
+
     // Try flash file
     String json = flash.readString(PATH_USER_CONFIG);
-    if (!json.isEmpty() && parseJson(json)) return true;
+    if (!json.isEmpty() && parseJson(json)) {
+        if (_migrationDirty) save(flash);
+        return true;
+    }
 
     // Fall back to NVS
     json = loadFromNVS();
     if (!json.isEmpty()) {
         Serial.println("[CONFIG] Recovered from NVS (flash file missing)");
-        return parseJson(json);
+        if (parseJson(json)) {
+            if (_migrationDirty) save(flash);
+            return true;
+        }
     }
 
     Serial.println("[CONFIG] No saved config anywhere, using defaults");
@@ -178,12 +195,17 @@ bool UserConfig::save(FlashStore& flash) {
 // ---------------------------------------------------------------------------
 
 bool UserConfig::load(SDStore& sd, FlashStore& flash) {
+    _migrationDirty = false;
+
     // Tier 1: SD card
     if (sd.isReady()) {
         String json = sd.readString(SD_PATH_USER_CONFIG);
         if (!json.isEmpty()) {
             Serial.println("[CONFIG] Loading from SD card");
-            if (parseJson(json)) return true;
+            if (parseJson(json)) {
+                if (_migrationDirty) save(sd, flash);
+                return true;
+            }
         }
     }
 
@@ -201,6 +223,7 @@ bool UserConfig::load(SDStore& sd, FlashStore& flash) {
                     sd.writeString(SD_PATH_USER_CONFIG, migrateJson);
                     Serial.println("[CONFIG] Migrated to SD");
                 }
+                if (_migrationDirty) save(sd, flash);
                 return true;
             }
         }
