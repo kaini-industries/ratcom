@@ -554,6 +554,7 @@ void setup() {
         Serial.printf( "[RADIO] │  txpower         = %d\n",  s.loraTxPower);
         Serial.printf( "[RADIO] │  preamble        = %d  syncword = 0x1424\n", LORA_DEFAULT_PREAMBLE);
         Serial.println("[RADIO] └──────────────────────────────────────────────┘");
+        radio.dumpRegisters("FINAL (after user config)");
     }
 
     // Mode-based WiFi startup

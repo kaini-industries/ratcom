@@ -744,12 +744,6 @@ void SX1262::setPacketParams(uint32_t preamble, uint8_t headermode, uint8_t leng
     buf[5] = 0x00;  // Standard IQ (no inversion)
     executeOpcode(OP_PACKET_PARAMS_6X, buf, 6);
 
-    // SX1262 errata 15.1: IQ polarity register must be corrected after SetPacketParams.
-    // For standard IQ (no inversion), bit 2 of register 0x0736 must be SET.
-    // For inverted IQ, bit 2 must be CLEARED. (RadioLib: SX126x.cpp)
-    uint8_t iqReg = readRegister(REG_IQ_POLARITY_6X);
-    iqReg |= 0x04;  // Standard IQ: set bit 2
-    writeRegister(REG_IQ_POLARITY_6X, iqReg);
 }
 
 void SX1262::setSyncWord(uint16_t sw) {
@@ -873,4 +867,25 @@ void SX1262::onReceive(void(*callback)(int)) {
 
 uint8_t SX1262::random() {
     return readRegister(REG_RANDOM_GEN_6X);
+}
+
+void SX1262::dumpRegisters(const char* label) {
+    uint8_t swMsb = readRegister(REG_SYNC_WORD_MSB_6X);
+    uint8_t swLsb = readRegister(REG_SYNC_WORD_LSB_6X);
+    uint8_t iqReg = readRegister(REG_IQ_POLARITY_6X);
+    uint8_t lna   = readRegister(REG_LNA_6X);
+    uint16_t devErr = getDeviceErrors();
+    uint8_t status = getStatus();
+    uint8_t chipMode = (status >> 4) & 0x07;
+
+    Serial.printf("[SX1262] ┌─ Register Dump: %s ─┐\n", label);
+    Serial.printf("[SX1262] │  SyncWord  = 0x%02X%02X\n", swMsb, swLsb);
+    Serial.printf("[SX1262] │  IQ Polar  = 0x%02X (bit2=%d)\n", iqReg, (iqReg >> 2) & 1);
+    Serial.printf("[SX1262] │  LNA       = 0x%02X\n", lna);
+    Serial.printf("[SX1262] │  ModParams = SF=%d BW=0x%02X CR=%d LDRO=%d\n", _sf, _bw, _cr, _ldro);
+    Serial.printf("[SX1262] │  PktParams = pre=%ld hdr=%d len=%d crc=%d\n",
+                  _preambleLength, _implicitHeaderMode, _payloadLength, _crcMode);
+    Serial.printf("[SX1262] │  DevErrors = 0x%04X\n", devErr);
+    Serial.printf("[SX1262] │  Status    = 0x%02X (mode=%d)\n", status, chipMode);
+    Serial.println("[SX1262] └──────────────────────────────────────┘");
 }

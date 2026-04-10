@@ -65,6 +65,9 @@ public:
     uint8_t getStatus();
     uint16_t getIrqFlags();
 
+    // --- Diagnostics ---
+    void dumpRegisters(const char* label = "");
+
     // --- FIFO access ---
     void readBuffer(uint8_t* buffer, size_t size);
     const uint8_t* packetBuffer() const { return _packet; }

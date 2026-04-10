@@ -179,13 +179,28 @@ void LoRaInterface::loop() {
 
     // Periodic RX debug (5s for Ratcom — more frequent than Ratdeck's 30s)
     static unsigned long lastRxDebug = 0;
+    static uint32_t irqPollCount = 0;
+    static uint32_t irqRxDoneCount = 0;
+    static uint32_t irqPreambleCount = 0;
+    static uint32_t irqCrcErrCount = 0;
+
+    // Poll IRQ flags every loop to detect ANY radio activity
+    uint16_t irqFlags = _radio->getIrqFlags();
+    irqPollCount++;
+    if (irqFlags & 0x0002) irqRxDoneCount++;    // RX_DONE
+    if (irqFlags & 0x0004) irqPreambleCount++;   // PREAMBLE_DETECTED
+    if (irqFlags & 0x0040) irqCrcErrCount++;     // CRC_ERROR
+
     if (millis() - lastRxDebug > 5000) {
         lastRxDebug = millis();
         int rssi = _radio->currentRssi();
         uint8_t status = _radio->getStatus();
         uint8_t chipMode = (status >> 4) & 0x07;
-        Serial.printf("[LORA_IF] RX: RSSI=%d dBm, status=0x%02X(mode=%d)\n",
-            rssi, status, chipMode);
+        Serial.printf("[LORA_IF] RX: RSSI=%d dBm, status=0x%02X(mode=%d) pktAvail=%d\n",
+            rssi, status, chipMode, _radio->packetAvailable ? 1 : 0);
+        Serial.printf("[LORA_IF] IRQ: polls=%lu rxDone=%lu preamble=%lu crcErr=%lu flags=0x%04X\n",
+            (unsigned long)irqPollCount, (unsigned long)irqRxDoneCount,
+            (unsigned long)irqPreambleCount, (unsigned long)irqCrcErrCount, irqFlags);
     }
 
     if (!_radio->packetAvailable) return;
