@@ -155,6 +155,7 @@ bool RatLoRa::isTxBusy() {
         Serial.printf("[SX1262] TX ASYNC TIMEOUT after %dms\n", (int)(millis() - _txStartMs));
         _rl->finishTransmit();
         _txActive = false;
+        packetAvailable = false;
         return false;
     }
 
@@ -162,6 +163,8 @@ bool RatLoRa::isTxBusy() {
     if (_mod->hal->digitalRead(_irq)) {
         _rl->finishTransmit();
         _txActive = false;
+        // Clear stale flag — DIO1 fired for TX_DONE, not RX_DONE
+        packetAvailable = false;
         return false;
     }
 

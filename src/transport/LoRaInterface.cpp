@@ -189,9 +189,10 @@ void LoRaInterface::loop() {
     }
 
     if (!_radio->packetAvailable) return;
-    _radio->packetAvailable = false;
 
     int packetSize = _radio->parsePacket();
+    // Clear flag AFTER parsePacket — if ISR fires during readData(), we don't lose the new event
+    _radio->packetAvailable = false;
     if (packetSize <= RNODE_HEADER_L) {
         if (packetSize > 0) {
             Serial.printf("[LORA_IF] RX runt packet (%d bytes), discarding\n", packetSize);
@@ -236,9 +237,8 @@ void LoRaInterface::loop() {
             InterfaceImpl::handle_incoming(_splitRxBuffer);
             _splitRxBuffer = RNS::Bytes();
 
-            if (!_txPending) {
-                _radio->receive();
-            }
+            // Always re-arm RX — if TX is pending, transmitNow() will override
+            _radio->receive();
             return;
         } else {
             Serial.printf("[LORA_IF] RX SPLIT seq mismatch (had 0x%02X, got 0x%02X), restarting\n",
@@ -265,9 +265,8 @@ void LoRaInterface::loop() {
     memcpy(buf.writable(payloadSize), raw + RNODE_HEADER_L, payloadSize);
     InterfaceImpl::handle_incoming(buf);
 
-    if (!_txPending) {
-        _radio->receive();
-    }
+    // Always re-arm RX — if TX is pending, transmitNow() will override
+    _radio->receive();
 }
 
 float LoRaInterface::airtimeUtilization() const {

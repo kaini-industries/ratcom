@@ -972,7 +972,7 @@ void loop() {
 
     // 9. Power-aware RNS throttle
     if (power.state() == PowerManager::SCREEN_OFF) {
-        rnsInterval = 50;  // 20 Hz when screen off
+        rnsInterval = 25;  // 40 Hz when screen off — keeps split-packet latency low
     } else {
         rnsInterval = RNS_INTERVAL_MS;  // 200 Hz when active
     }

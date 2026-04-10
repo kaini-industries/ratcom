@@ -157,6 +157,13 @@ bool ReticulumManager::begin(RatLoRa* radio, FlashStore* flash) {
     _reticulum.start();
     Serial.println("[RNS] Reticulum started (Endpoint)");
 
+    // Load persisted path table even in endpoint mode — without this,
+    // paths learned in previous sessions are lost on reboot.
+    if (RNS::Transport::read_path_table()) {
+        Serial.printf("[RNS] Restored %zu paths from storage\n",
+                      _reticulum.get_path_table().size());
+    }
+
     // Layer 1: Transport-level announce filter — runs BEFORE Ed25519 verify
     RNS::Transport::set_filter_packet_callback([](const RNS::Packet& packet) -> bool {
         if (packet.packet_type() != RNS::Type::Packet::ANNOUNCE) return true;
@@ -168,19 +175,17 @@ bool ReticulumManager::begin(RatLoRa* radio, FlashStore* flash) {
         static unsigned int count = 0;
         if (now - windowStart >= 1000) { windowStart = now; count = 0; }
 
-        // Adaptive rate: tight during boot flood, then normal, emergency if low heap
+        // Adaptive rate: emergency throttle if low heap, otherwise normal
         unsigned int maxRate;
         if (ESP.getFreeHeap() < 15000) {
             maxRate = 1;  // Emergency: almost no processing
-        } else if (now < 60000) {
-            maxRate = 2;  // Boot flood
         } else {
             maxRate = RATCOM_MAX_ANNOUNCES_PER_SEC;
         }
         if (++count > maxRate) return false;
 
         // Skip re-validation of known paths (saves ~100ms Ed25519 per announce)
-        // Allow through once per 5 min for name/ratchet updates.
+        // Allow through once per 45s for name/ratchet updates and path freshness.
         // Uses raw hash bytes as key (avoids expensive toHex + hops_to per packet).
         if (RNS::Transport::has_path(packet.destination_hash())) {
             static std::unordered_map<std::string, unsigned long> lastRevalidate;
@@ -188,7 +193,7 @@ bool ReticulumManager::begin(RatLoRa* radio, FlashStore* flash) {
                             packet.destination_hash().size());
 
             auto it = lastRevalidate.find(key);
-            if (it != lastRevalidate.end() && (now - it->second) < 300000) return false;
+            if (it != lastRevalidate.end() && (now - it->second) < 45000) return false;
             lastRevalidate[key] = now;
 
             // Cap map to save heap
@@ -330,9 +335,10 @@ void ReticulumManager::loop() {
 
 void ReticulumManager::startPersistTask() {
     _persistQueue = xQueueCreate(1, sizeof(uint8_t));
-    // Pin to core 1 (same as main loop) — core 0 is WiFi/lwIP, sharing LittleFS across cores corrupts FS
-    xTaskCreatePinnedToCore(persistTaskFunc, "persist", 8192, this, 1, &_persistTask, 1);
-    Serial.println("[RNS] Persist task started on core 1");
+    // Pin to core 0 — FSLock mutex serializes LittleFS access safely across cores.
+    // Core 0 runs WiFi/lwIP but those don't touch LittleFS, so no conflict.
+    xTaskCreatePinnedToCore(persistTaskFunc, "persist", 8192, this, 1, &_persistTask, 0);
+    Serial.println("[RNS] Persist task started on core 0");
 }
 
 void ReticulumManager::persistTaskFunc(void* param) {

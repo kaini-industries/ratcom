@@ -83,7 +83,7 @@ private:
     unsigned long _lastAnnounceTime = 0;
     uint8_t _persistCycle = 0;  // Rotating: 0=Transport, 1=Identity
 
-    // Background persist task (core 0) — flash writes don't block main loop
+    // Background persist task (core 0) — flash writes on core 0 don't compete with main loop on core 1
     QueueHandle_t _persistQueue = nullptr;
     TaskHandle_t _persistTask = nullptr;
 };

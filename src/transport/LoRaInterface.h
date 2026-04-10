@@ -31,7 +31,7 @@ private:
     RatLoRa* _radio;
     bool _txPending = false;
     unsigned long _txStartMs = 0;
-    static constexpr unsigned long TX_TIMEOUT_MS = 10000;  // 10s — recover from radio hang
+    static constexpr unsigned long TX_TIMEOUT_MS = 4000;   // 4s — max airtime is ~500ms at SF8/BW125k
     RNS::Bytes _txData;
 
     // TX queue: buffer packets when radio is busy instead of dropping
@@ -44,7 +44,7 @@ private:
     uint8_t _splitTxHeader = 0;
 
     // Split-packet RX state: reassemble two LoRa frames into one Reticulum packet
-    static constexpr unsigned long SPLIT_RX_TIMEOUT_MS = 5000;
+    static constexpr unsigned long SPLIT_RX_TIMEOUT_MS = 2000;  // 2s — frame 2 arrives within ~200ms normally
     bool _splitRxPending = false;
     uint8_t _splitRxSeq = 0;
     RNS::Bytes _splitRxBuffer;

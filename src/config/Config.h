@@ -55,7 +55,7 @@
 #define RATCOM_MSG_WARN_PCT           90  // Warn user at 90% capacity
 #define FLASH_MSG_CACHE_LIMIT         20  // Flash cache per conv when SD is primary
 #define RATCOM_MAX_OUTQUEUE        20   // Cap LXMF outgoing queue
-#define PATH_PERSIST_INTERVAL_MS 300000  // 5 min — endpoint rebuilds from announces
+#define PATH_PERSIST_INTERVAL_MS 120000  // 2 min — frequent enough to survive unexpected reboots
 
 // --- Power Management ---
 #define SCREEN_DIM_TIMEOUT_MS   30000
