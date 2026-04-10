@@ -300,6 +300,19 @@ void onHotkeyRadioTest() {
     radio.receive();
 }
 
+void onHotkeyCADTest() {
+    Serial.println("[CAD] Starting Channel Activity Detection test (20 iterations)...");
+    Serial.println("[CAD] Listen for LoRa preambles on current frequency");
+    int detected = radio.runCADTest(20);
+    Serial.printf("[CAD] Test complete. Re-entering RX mode.\n");
+    radio.receive();
+    if (detected == 0) {
+        Serial.println("[CAD] No LoRa activity detected — RF front-end issue or no TX source");
+    } else {
+        Serial.printf("[CAD] %d/20 preambles detected — RF chain works, RX demod issue\n", detected);
+    }
+}
+
 // =============================================================================
 // Announce with display name
 // =============================================================================
@@ -385,6 +398,7 @@ void setup() {
     hotkeys.registerHotkey('d', "Diagnostics", onHotkeyDiag);
     hotkeys.registerHotkey('t', "Radio Test", onHotkeyRadioTest);
     hotkeys.registerHotkey('r', "RSSI Monitor", onHotkeyRssiMonitor);
+    hotkeys.registerHotkey('c', "CAD Test", onHotkeyCADTest);
     hotkeys.setTabCycleCallback([](int dir) {
         ui.tabBar().cycleTab(dir);
         int tab = ui.tabBar().getActiveTab();

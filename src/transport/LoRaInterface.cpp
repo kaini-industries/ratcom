@@ -177,11 +177,15 @@ void LoRaInterface::loop() {
         _splitRxBuffer = RNS::Bytes();
     }
 
-    // Periodic RX debug
+    // Periodic RX debug — IRQ flags, DIO1 state, device errors
     static unsigned long lastRxDebug = 0;
     if (millis() - lastRxDebug > 5000) {
         lastRxDebug = millis();
-        Serial.printf("[LORA_IF] RX: pktAvail=%d\n", _radio->packetAvailable ? 1 : 0);
+        uint16_t irq = _radio->getIrqFlags();
+        uint16_t devErr = _radio->getDeviceErrors();
+        int dio1 = digitalRead(LORA_IRQ);
+        Serial.printf("[LORA_IF] RX: pktAvail=%d dio1=%d irq=0x%04X devErr=0x%04X\n",
+                      _radio->packetAvailable ? 1 : 0, dio1, irq, devErr);
     }
 
     if (!_radio->packetAvailable) return;

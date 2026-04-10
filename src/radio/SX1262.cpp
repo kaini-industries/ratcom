@@ -73,6 +73,9 @@ bool RatLoRa::begin(uint32_t frequency) {
     _rl->setCRC(true);
     _crcEnabled = true;
 
+    // Boosted RX gain — full sensitivity (+3dB over power-saving default)
+    _rl->setRxBoostedGainMode(true);
+
     // Set up DIO1 interrupt for RX packet detection
     _rl->setDio1Action(onDio1Rise);
 
@@ -334,19 +337,20 @@ float RatLoRa::getAirtime(uint16_t written) {
 
 uint8_t RatLoRa::readRegister(uint16_t address) {
     if (!_mod) return 0;
-    uint8_t val = 0;
-    // Use Module's SPI to read register directly
-    _mod->SPIreadRegister(address);
-    return val;
+    return _mod->SPIreadRegister(address);
 }
 
 uint16_t RatLoRa::getDeviceErrors() {
-    // RadioLib doesn't expose getDeviceErrors publicly — skip for now
-    return 0;
+    if (!_mod) return 0;
+    uint8_t data[2] = {0, 0};
+    _mod->SPIreadStream(RADIOLIB_SX126X_CMD_GET_DEVICE_ERRORS, data, 2);
+    return ((uint16_t)data[0] << 8) | (uint16_t)data[1];
 }
 
 void RatLoRa::clearDeviceErrors() {
-    // RadioLib doesn't expose clearDeviceErrors publicly — skip for now
+    if (!_mod) return;
+    uint8_t data[2] = {0, 0};
+    _mod->SPIwriteStream(RADIOLIB_SX126X_CMD_CLEAR_DEVICE_ERRORS, data, 2);
 }
 
 uint8_t RatLoRa::getStatus() {
@@ -382,6 +386,28 @@ void RatLoRa::dumpRegisters(const char* label) {
     Serial.printf("[SX1262] │  DevErrors = 0x%04X\n", devErr);
     Serial.printf("[SX1262] │  Status    = 0x%02X (mode=%d)\n", status, chipMode);
     Serial.println("[SX1262] └──────────────────────────────────────┘");
+}
+
+// =============================================================================
+// CAD (Channel Activity Detection) — diagnostic for RX chain verification
+// =============================================================================
+
+int RatLoRa::runCADTest(int iterations) {
+    if (!_rl) return -1;
+    int detected = 0;
+    for (int i = 0; i < iterations; i++) {
+        int16_t result = _rl->scanChannel();
+        if (result == RADIOLIB_LORA_DETECTED) {
+            detected++;
+            Serial.printf("[CAD] %d/%d: DETECTED\n", i + 1, iterations);
+        } else if (result == RADIOLIB_CHANNEL_FREE) {
+            Serial.printf("[CAD] %d/%d: free\n", i + 1, iterations);
+        } else {
+            Serial.printf("[CAD] %d/%d: error %d\n", i + 1, iterations, result);
+        }
+    }
+    Serial.printf("[CAD] Result: %d/%d detected\n", detected, iterations);
+    return detected;
 }
 
 // =============================================================================

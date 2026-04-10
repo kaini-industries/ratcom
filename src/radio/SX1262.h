@@ -68,6 +68,7 @@ public:
 
     // --- Diagnostics ---
     void dumpRegisters(const char* label = "");
+    int  runCADTest(int iterations = 20);
 
     // --- FIFO access ---
     void readBuffer(uint8_t* buffer, size_t size);

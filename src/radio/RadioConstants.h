@@ -84,7 +84,10 @@
 #define MODE_TCXO_1_6V_6X           0x00
 
 // --- Sync Word ---
-#define SYNC_WORD_6X                0x1424
+// RadioLib expects the SX127x-style sync word (0x12 = private LoRa network)
+// and internally converts it to the SX1262 register values (0x1424).
+// Passing 0x1424 directly causes truncation to 0x24 → wrong registers 0x2444.
+#define SYNC_WORD_6X                0x12
 
 // --- OCP ---
 #define OCP_TUNED                   0x38  // 160mA overcurrent limit
