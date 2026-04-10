@@ -9,7 +9,7 @@
 class HomeScreen : public Screen {
 public:
     void setReticulumManager(ReticulumManager* mgr) { _rns = mgr; }
-    void setRadio(SX1262* radio) { _radio = radio; }
+    void setRadio(RatLoRa* radio) { _radio = radio; }
     void setUserConfig(UserConfig* cfg) { _userConfig = cfg; }
     void setAnnounceCallback(std::function<void()> cb) { _announceCb = cb; }
 
@@ -19,7 +19,7 @@ public:
 
 private:
     ReticulumManager* _rns = nullptr;
-    SX1262* _radio = nullptr;
+    RatLoRa* _radio = nullptr;
     UserConfig* _userConfig = nullptr;
     std::function<void()> _announceCb;
     unsigned long _announceFlashUntil = 0;

@@ -47,7 +47,7 @@ SET_LOOP_TASK_STACK_SIZE(16384);  // 16KB — needed for Ed25519 crypto in RNS b
 
 // --- Hardware ---
 SPIClass loraSPI(HSPI);
-SX1262 radio(&loraSPI,
+RatLoRa radio(&loraSPI,
     LORA_CS, LORA_SCK, LORA_MOSI, LORA_MISO,
     LORA_RST, LORA_IRQ, LORA_BUSY, LORA_RXEN,
     LORA_HAS_TCXO, LORA_DIO2_AS_RF_SWITCH);

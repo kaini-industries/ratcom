@@ -122,7 +122,7 @@ size_t LittleFSFileSystem::storage_available() {
 // ReticulumManager
 // =============================================================================
 
-bool ReticulumManager::begin(SX1262* radio, FlashStore* flash) {
+bool ReticulumManager::begin(RatLoRa* radio, FlashStore* flash) {
     _flash = flash;
 
     // Register filesystem with microReticulum (required — library throws if missing)

@@ -6,7 +6,7 @@
 
 class LoRaInterface : public RNS::InterfaceImpl {
 public:
-    LoRaInterface(SX1262* radio, const char* name = "LoRaInterface");
+    LoRaInterface(RatLoRa* radio, const char* name = "LoRaInterface");
     virtual ~LoRaInterface();
 
     virtual bool start() override;
@@ -28,7 +28,7 @@ protected:
 private:
     void transmitNow(const RNS::Bytes& data);
 
-    SX1262* _radio;
+    RatLoRa* _radio;
     bool _txPending = false;
     unsigned long _txStartMs = 0;
     static constexpr unsigned long TX_TIMEOUT_MS = 10000;  // 10s — recover from radio hang

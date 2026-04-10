@@ -25,7 +25,7 @@ public:
     void setUserConfig(UserConfig* cfg) { _config = cfg; }
     void setFlashStore(FlashStore* flash) { _flash = flash; }
     void setSDStore(SDStore* sd) { _sdStore = sd; }
-    void setRadio(SX1262* radio) { _radio = radio; }
+    void setRadio(RatLoRa* radio) { _radio = radio; }
     void setAudio(AudioNotify* audio) { _audio = audio; }
     void setPower(PowerManager* power) { _power = power; }
     void setWiFi(WiFiInterface* wifi) { _wifi = wifi; }
@@ -73,7 +73,7 @@ private:
     UserConfig* _config = nullptr;
     FlashStore* _flash = nullptr;
     SDStore* _sdStore = nullptr;
-    SX1262* _radio = nullptr;
+    RatLoRa* _radio = nullptr;
     AudioNotify* _audio = nullptr;
     PowerManager* _power = nullptr;
     WiFiInterface* _wifi = nullptr;

@@ -1,22 +1,23 @@
 #pragma once
 
 // =============================================================================
-// SX1262 LoRa Radio Driver
-// Extracted from RNode_Firmware_CE (MIT License)
-// Original: Copyright (c) Sandeep Mistry, modifications by Mark Qvist & Jacob Eva
-// Simplified for RatCom: single-interface, no CSMA/CA, no sx127x/sx128x
+// SX1262 LoRa Radio Driver — RadioLib Backend
+//
+// Same public interface as the original custom driver, but delegates all SPI
+// and radio operations to RadioLib (proven compatible with RNode firmware).
 // =============================================================================
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <RadioLib.h>
 #include "RadioConstants.h"
 #include "config/BoardConfig.h"
 
-class SX1262 {
+class RatLoRa {
 public:
-    SX1262(SPIClass* spi, int ss, int sclk, int mosi, int miso,
-           int reset, int irq, int busy, int rxen = -1,
-           bool tcxo = true, bool dio2_as_rf_switch = true);
+    RatLoRa(SPIClass* spi, int ss, int sclk, int mosi, int miso,
+            int reset, int irq, int busy, int rxen = -1,
+            bool tcxo = true, bool dio2_as_rf_switch = true);
 
     // --- Lifecycle ---
     bool begin(uint32_t frequency);
@@ -82,78 +83,47 @@ public:
     // --- Misc ---
     uint8_t random();
 
+public:
+    volatile bool packetAvailable = false;
+
 private:
-    // --- SPI Operations ---
-    bool preInit();
-    void reset();
-    void writeRegister(uint16_t address, uint8_t value);
-    uint8_t singleTransfer(uint8_t opcode, uint16_t address, uint8_t value);
-    void executeOpcode(uint8_t opcode, uint8_t* buffer, uint8_t size);
-    void executeOpcodeRead(uint8_t opcode, uint8_t* buffer, uint8_t size);
-    void writeBuffer(const uint8_t* buffer, size_t size);
-    void waitOnBusy();
+    // --- RadioLib backend ---
+    Module*       _mod = nullptr;
+    ::SX1262*     _rl = nullptr;    // RadioLib SX1262 instance
 
-    // --- Internal Config ---
-    void loraMode();
-    void rxAntEnable();
-    void calibrate();
-    void calibrate_image(uint32_t frequency);
-    void enableTCXO();
-    void setModulationParams(uint8_t sf, uint8_t bw, uint8_t cr, int ldro);
-    void setPacketParams(uint32_t preamble, uint8_t headermode, uint8_t length, uint8_t crc);
-    void setSyncWord(uint16_t sw);
-    void explicitHeaderMode();
-    void implicitHeaderMode();
-    void handleLowDataRate();
-
-    // --- ISR ---
-    void handleDio0Rise();
-    bool getPacketValidity();
-    static void IRAM_ATTR onDio0Rise();
-
-    // --- State ---
-    SPISettings _spiSettings;
+    // --- Pin config (stored for RadioLib Module construction) ---
     SPIClass*   _spiModem;
     int _ss, _sclk, _mosi, _miso;
     int _reset, _irq, _busy, _rxen;
+    bool _tcxo;
+    bool _dio2_as_rf_switch;
+    float _tcxoVoltage;
 
+    // --- Cached parameters ---
     uint32_t _frequency = 0;
-    uint8_t  _sf = 0;
-    uint8_t  _bw = 0;
-    uint8_t  _cr = 0;
-    int8_t   _txp = 0;
-    bool     _ldro = false;
-    long     _preambleLength = 0;
+    uint8_t  _sf = 8;
+    uint32_t _bwHz = 125000;
+    uint8_t  _cr = 5;       // denominator (5 = 4/5)
+    int8_t   _txp = 22;
+    long     _preambleLength = 18;
+    bool     _crcEnabled = true;
+    bool     _radioOnline = false;
 
-    int  _packetIndex = 0;
-    int  _implicitHeaderMode = 0;
-    int  _payloadLength = 0;
-    int  _crcMode = 0;
-    int  _fifo_tx_addr_ptr = 0;
-    int  _fifo_rx_addr_ptr = 0;
-
-    bool _preinitDone = false;
-    bool _radioOnline = false;
-    bool _tcxo = false;
-    bool _dio2_as_rf_switch = false;
-
-    bool _txActive = false;
+    // --- TX buffer (RadioLib needs all data at once) ---
+    uint8_t  _txBuf[MAX_PACKET_SIZE] = {};
+    int      _txBufLen = 0;
+    bool     _txActive = false;
     uint32_t _txStartMs = 0;
     uint32_t _txTimeoutMs = 0;
 
-    uint8_t _packet[MAX_PACKET_SIZE] = {};
-    void (*_onReceive)(int) = nullptr;
+    // --- RX packet buffer ---
+    uint8_t  _packet[MAX_PACKET_SIZE] = {};
+    int      _packetLen = 0;
+    int      _packetIndex = 0;
+    int      _lastRssi = 0;
+    float    _lastSnr = 0;
 
-public:
-    volatile bool packetAvailable = false;
-private:
-
-    // DCD timing
-    unsigned long _preambleDetectedAt = 0;
-    long _loraPreambleTimeMs = 0;
-    long _loraHeaderTimeMs = 0;
-    float _loraSymbolTimeMs = 0;
-
-    // Singleton for ISR
-    static SX1262* _instance;
+    // --- ISR ---
+    static void IRAM_ATTR onDio1Rise();
+    static RatLoRa* _instance;
 };
