@@ -64,6 +64,7 @@ public:
     // Access
     RNS::Destination& destination() { return _destination; }
     LoRaInterface* loraInterface() { return _loraImpl; }
+    RNS::Reticulum& reticulum() { return _reticulum; }
 
 private:
     bool loadOrCreateIdentity();

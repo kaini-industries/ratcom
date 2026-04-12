@@ -81,6 +81,9 @@ public:
     void standby();
     void sleep();
 
+    // --- Reinit (recover from stuck states) ---
+    bool reinit();
+
     // --- Misc ---
     uint8_t random();
 

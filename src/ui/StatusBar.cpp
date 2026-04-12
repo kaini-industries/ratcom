@@ -80,9 +80,17 @@ void StatusBar::render(M5Canvas& canvas) {
         rx -= 4;
     }
 
-    // LoRa indicator
+    // LoRa indicator — blink when unhealthy
     const char* loraStr = _loraOnline ? "LoRa" : "----";
-    uint16_t loraColor = _loraOnline ? Theme::PRIMARY : Theme::MUTED;
+    uint16_t loraColor = Theme::MUTED;
+    if (_loraOnline) {
+        if (_loraHealthy) {
+            loraColor = Theme::PRIMARY;
+        } else {
+            // Blink red/yellow at 2Hz when radio is sick
+            loraColor = ((millis() / 500) % 2) ? Theme::ERROR : Theme::WARNING;
+        }
+    }
     int loraW = strlen(loraStr) * Theme::CHAR_W;
     rx -= loraW;
     canvas.fillCircle(rx - 4, Theme::STATUS_PAD + 3, 2, loraColor);

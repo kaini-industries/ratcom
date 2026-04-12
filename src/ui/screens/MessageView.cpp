@@ -1,6 +1,7 @@
 #include "MessageView.h"
 #include "ui/Theme.h"
 #include "reticulum/AnnounceManager.h"
+#include <Transport.h>
 #include <time.h>
 
 void MessageView::onEnter() {
@@ -22,7 +23,9 @@ void MessageView::refreshMessages() {
     // Merge any pending messages not yet flushed to disk.
     // Only remove pending entries that were confirmed written (found in disk load).
     // This prevents messages from vanishing if the WriteQueue hasn't flushed yet.
-    auto pendIt = _pendingMessages.find(_peerHex);
+    // Use normalized 16-char key to match how notifyNewMessage() stores pending messages
+    std::string pendKey = _peerHex.substr(0, 16);
+    auto pendIt = _pendingMessages.find(pendKey);
     if (pendIt != _pendingMessages.end()) {
         auto& pendings = pendIt->second;
         // _messages currently holds only disk-loaded messages (from getMessages above).
@@ -80,8 +83,32 @@ void MessageView::refreshMessages() {
             line.text = std::string(ts) + " " + sender + "> " + msg.content;
             line.color = Theme::PRIMARY;
         } else {
-            line.text = std::string(ts) + " you> " + msg.content;
-            line.color = (msg.status == LXMFStatus::FAILED) ? Theme::ERROR : Theme::PRIMARY;
+            // Status indicator suffix for outgoing messages
+            const char* statusTag = "";
+            uint16_t statusColor = Theme::PRIMARY;
+            switch (msg.status) {
+                case LXMFStatus::QUEUED:
+                case LXMFStatus::SENDING:
+                    statusTag = " ~";
+                    statusColor = Theme::WARNING;
+                    break;
+                case LXMFStatus::SENT:
+                    statusTag = " >";
+                    statusColor = Theme::MUTED;
+                    break;
+                case LXMFStatus::DELIVERED:
+                    statusTag = " >>";
+                    statusColor = Theme::ACCENT;
+                    break;
+                case LXMFStatus::FAILED:
+                    statusTag = " X";
+                    statusColor = Theme::ERROR;
+                    break;
+                default:
+                    break;
+            }
+            line.text = std::string(ts) + " you> " + msg.content + statusTag;
+            line.color = statusColor;
         }
 
         _chatLines.push_back(line);
@@ -108,7 +135,7 @@ void MessageView::render(M5Canvas& canvas) {
 
     int baseY = Theme::CONTENT_Y;
 
-    // Header: node name or peer hash + back hint
+    // Header: node name or peer hash + path status + back hint
     std::string header;
     if (_am) {
         const DiscoveredNode* node = _am->findNodeByHex(_peerHex);
@@ -125,8 +152,30 @@ void MessageView::render(M5Canvas& canvas) {
     canvas.setTextSize(Theme::FONT_SIZE);
     canvas.drawString(header.c_str(), 4, baseY);
 
+    // Path status indicator (right of name, left of [Esc])
+    {
+        RNS::Bytes destHash;
+        destHash.assignHex(_peerHex.c_str());
+        bool hasPath = RNS::Transport::has_path(destHash);
+        const char* pathStr;
+        uint16_t pathColor;
+        if (hasPath) {
+            int hops = RNS::Transport::hops_to(destHash);
+            static char pathBuf[16];
+            snprintf(pathBuf, sizeof(pathBuf), "%dhop", hops);
+            pathStr = pathBuf;
+            pathColor = Theme::SECONDARY;
+        } else {
+            pathStr = "no path";
+            pathColor = Theme::ERROR;
+        }
+        int nameW = header.size() * Theme::CHAR_W + 8;
+        canvas.setTextColor(pathColor);
+        canvas.drawString(pathStr, nameW, baseY);
+    }
+
     canvas.setTextColor(Theme::MUTED);
-    canvas.drawString("[Esc:back]", Theme::CONTENT_W - 60, baseY);
+    canvas.drawString("[Esc]", Theme::CONTENT_W - 30, baseY);
 
     // Separator
     canvas.drawFastHLine(0, baseY + 9, Theme::CONTENT_W, Theme::BORDER);
@@ -212,14 +261,14 @@ std::string MessageView::peerDisplayName() const {
 }
 
 void MessageView::notifyNewMessage(const LXMFMessage& msg) {
-    std::string senderHex = msg.incoming ?
+    std::string senderHexFull = msg.incoming ?
         msg.sourceHash.toHex() : msg.destHash.toHex();
+    // Normalize to 16-char hex — matches conversation dir names and _peerHex from messages list
+    std::string senderHex = senderHexFull.substr(0, 16);
 
     // Check if this message is for the peer we're currently viewing
-    bool match = (senderHex == _peerHex);
-    if (!match && _peerHex.size() < senderHex.size()) {
-        match = (senderHex.substr(0, _peerHex.size()) == _peerHex);
-    }
+    // Compare normalized 16-char prefixes to handle mixed 16/32-char _peerHex
+    bool match = (_peerHex.substr(0, 16) == senderHex);
 
     // Always store in pending for merge on next refreshMessages()
     // This ensures messages survive the async write delay
@@ -253,8 +302,22 @@ void MessageView::notifyNewMessage(const LXMFMessage& msg) {
         line.text = std::string(ts) + " " + sender + "> " + msg.content;
         line.color = Theme::PRIMARY;
     } else {
-        line.text = std::string(ts) + " you> " + msg.content;
-        line.color = Theme::PRIMARY;
+        const char* statusTag = "";
+        uint16_t statusColor = Theme::PRIMARY;
+        switch (msg.status) {
+            case LXMFStatus::QUEUED:
+            case LXMFStatus::SENDING:
+                statusTag = " ~"; statusColor = Theme::WARNING; break;
+            case LXMFStatus::SENT:
+                statusTag = " >"; statusColor = Theme::MUTED; break;
+            case LXMFStatus::DELIVERED:
+                statusTag = " >>"; statusColor = Theme::ACCENT; break;
+            case LXMFStatus::FAILED:
+                statusTag = " X"; statusColor = Theme::ERROR; break;
+            default: break;
+        }
+        line.text = std::string(ts) + " you> " + msg.content + statusTag;
+        line.color = statusColor;
     }
     _chatLines.push_back(line);
 
@@ -282,25 +345,46 @@ void MessageView::notifyNewMessage(const LXMFMessage& msg) {
 }
 
 void MessageView::notifyStatusChange(const std::string& peerHex, double timestamp, LXMFStatus status) {
-    if (peerHex != _peerHex) return;
+    // Compare normalized 16-char prefixes to handle mixed 16/32-char strings
+    if (peerHex.substr(0, 16) != _peerHex.substr(0, 16)) return;
 
-    // Update the most recent pending outgoing chat line
+    // Find the most recent outgoing chat line that isn't already in a terminal state
     for (int i = _chatLines.size() - 1; i >= 0; i--) {
         auto& line = _chatLines[i];
-        if (line.text.find("you>") != std::string::npos && line.color == Theme::WARNING) {
-            switch (status) {
-                case LXMFStatus::SENT:
-                case LXMFStatus::DELIVERED:
-                    line.color = Theme::PRIMARY;
-                    break;
-                case LXMFStatus::FAILED:
-                    line.color = Theme::ERROR;
-                    break;
-                default:
-                    break;
+        if (line.text.find("you>") == std::string::npos) continue;
+        // Skip lines already in terminal states (DELIVERED or FAILED)
+        if (line.color == Theme::ACCENT || line.color == Theme::ERROR) continue;
+
+        // Update status tag and color
+        auto stripTag = [](std::string& text) {
+            // Remove trailing status tags: " ~", " >", " >>", " X"
+            for (const char* tag : {" >>", " >", " ~", " X"}) {
+                size_t pos = text.rfind(tag);
+                if (pos != std::string::npos && pos == text.size() - strlen(tag)) {
+                    text.erase(pos);
+                    return;
+                }
             }
-            break;
+        };
+
+        stripTag(line.text);
+        switch (status) {
+            case LXMFStatus::SENT:
+                line.text += " >";
+                line.color = Theme::MUTED;
+                break;
+            case LXMFStatus::DELIVERED:
+                line.text += " >>";
+                line.color = Theme::ACCENT;
+                break;
+            case LXMFStatus::FAILED:
+                line.text += " X";
+                line.color = Theme::ERROR;
+                break;
+            default:
+                break;
         }
+        break;
     }
 }
 
@@ -325,7 +409,7 @@ void MessageView::sendCurrentInput() {
         pending.timestamp = (time(nullptr) > 1700000000) ? (double)time(nullptr) : millis() / 1000.0;
         pending.incoming = false;
         pending.status = LXMFStatus::QUEUED;
-        _pendingMessages[_peerHex].push_back(pending);
+        _pendingMessages[_peerHex.substr(0, 16)].push_back(pending);
     }
 
     // Add sent message to display immediately
@@ -339,8 +423,8 @@ void MessageView::sendCurrentInput() {
     }
 
     ChatLine line;
-    line.text = std::string(ts) + " you> " + text;
-    line.color = Theme::PRIMARY;
+    line.text = std::string(ts) + " you> " + text + " ~";
+    line.color = Theme::WARNING;  // QUEUED — will update to SENT/DELIVERED via callback
     _chatLines.push_back(line);
 
     // Always scroll to bottom when sending

@@ -2,6 +2,7 @@
 
 #include "ui/Screen.h"
 #include "reticulum/ReticulumManager.h"
+#include "transport/LoRaInterface.h"
 #include "radio/SX1262.h"
 #include "config/UserConfig.h"
 #include <functional>

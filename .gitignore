@@ -11,3 +11,4 @@ ratcom-firmware.zip
 ratcom-merged.bin
 .env
 .claude
+plans/*

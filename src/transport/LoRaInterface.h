@@ -35,7 +35,7 @@ private:
     RNS::Bytes _txData;
 
     // TX queue: buffer packets when radio is busy instead of dropping
-    static constexpr int TX_QUEUE_MAX = 4;
+    static constexpr int TX_QUEUE_MAX = 8;
     std::deque<RNS::Bytes> _txQueue;
 
     // Split-packet TX state: when a packet > 254 bytes, send in two LoRa frames
@@ -56,6 +56,27 @@ private:
     unsigned long _airtimeWindowStart = 0;
     float _airtimeAccumMs = 0;
     static constexpr unsigned long AIRTIME_WINDOW_MS = 60000;
+
+    // Radio health watchdog
+    int _consecutiveTxTimeouts = 0;
+    int _totalReinits = 0;
+    unsigned long _lastRxTime = 0;          // millis() of last successful RX
+    static constexpr int REINIT_THRESHOLD = 3;  // reinit after 3 consecutive TX timeouts
+
 public:
     static constexpr float AIRTIME_THROTTLE = 0.25f;
+
+    // Radio health accessors
+    int consecutiveTxTimeouts() const { return _consecutiveTxTimeouts; }
+    int totalReinits() const { return _totalReinits; }
+    unsigned long lastRxTime() const { return _lastRxTime; }
+    bool radioHealthy() const { return _consecutiveTxTimeouts < REINIT_THRESHOLD; }
+
+    // Wire debug mode — hex dumps of packet headers for interop debugging
+    void setWireDebug(bool enabled) { _wireDebug = enabled; }
+    bool wireDebug() const { return _wireDebug; }
+
+private:
+    bool _wireDebug = false;
+    static void dumpPacketHeader(const char* direction, const uint8_t* data, size_t len, int rssi = 0, float snr = 0);
 };

@@ -10,6 +10,7 @@
 #include <functional>
 #include <deque>
 #include <set>
+#include <map>
 
 class LXMFManager {
 public:
@@ -33,6 +34,9 @@ public:
 
     // Queue info
     int queuedCount() const { return _outQueue.size(); }
+
+    // Proactively refresh path for a peer (call from active conversation view)
+    void refreshPathForPeer(const std::string& peerHex);
 
     // Get all conversations (destination hashes with messages)
     const std::vector<std::string>& conversations() const;
@@ -83,6 +87,19 @@ private:
     // Incoming message queue — packet callbacks push here, loop() processes
     std::vector<LXMFMessage> _incomingQueue;
     static constexpr int MAX_INCOMING_QUEUE = 16;
+
+    // Receipt tracking: map packet receipt hash → (peerHex, timestamp) for delivery proof callbacks
+    struct ReceiptInfo {
+        std::string peerHex;
+        double timestamp;
+    };
+    std::map<std::string, ReceiptInfo> _pendingReceipts;
+    static constexpr int MAX_PENDING_RECEIPTS = 20;
+    void trackReceipt(RNS::PacketReceipt receipt, const std::string& peerHex, double timestamp);
+
+    // Static receipt callbacks (raw function pointers required by microReticulum)
+    static void onDeliveryProof(const RNS::PacketReceipt& receipt);
+    static void onDeliveryTimeout(const RNS::PacketReceipt& receipt);
 
     static LXMFManager* _instance;
 };

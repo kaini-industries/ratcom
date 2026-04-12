@@ -434,6 +434,54 @@ void RatLoRa::sleep() {
 }
 
 // =============================================================================
+// Reinit — recover from stuck radio states without full reboot
+// =============================================================================
+
+bool RatLoRa::reinit() {
+    Serial.println("[SX1262] REINIT: resetting radio...");
+
+    if (_rl) {
+        _rl->sleep();
+        delay(10);
+    }
+
+    // Hardware reset via pin
+    if (_reset >= 0) {
+        pinMode(_reset, OUTPUT);
+        digitalWrite(_reset, LOW);
+        delay(10);
+        digitalWrite(_reset, HIGH);
+        delay(50);
+    }
+
+    // Re-initialize with cached parameters
+    float freqMHz = (float)_frequency / 1e6f;
+    float bwKHz   = (float)_bwHz / 1e3f;
+    int16_t state = _rl->begin(freqMHz, bwKHz, _sf, _cr, SYNC_WORD_6X, _txp, _preambleLength, _tcxoVoltage);
+
+    if (state != RADIOLIB_ERR_NONE) {
+        Serial.printf("[SX1262] REINIT FAILED: begin() returned %d\n", state);
+        _radioOnline = false;
+        return false;
+    }
+
+    if (_dio2_as_rf_switch) {
+        _rl->setDio2AsRfSwitch(true);
+    }
+    _rl->setCRC(_crcEnabled);
+    _rl->setRxBoostedGainMode(true);
+    _rl->setDio1Action(onDio1Rise);
+
+    _txActive = false;
+    packetAvailable = false;
+
+    uint16_t devErr = getDeviceErrors();
+    Serial.printf("[SX1262] REINIT OK (DevErrors: 0x%04X)\n", devErr);
+    _radioOnline = true;
+    return true;
+}
+
+// =============================================================================
 // Misc
 // =============================================================================
 

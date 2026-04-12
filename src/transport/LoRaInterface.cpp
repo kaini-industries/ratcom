@@ -97,6 +97,11 @@ void LoRaInterface::transmitNow(const RNS::Bytes& data) {
         Serial.printf("[LORA_IF] TX %d+1 bytes (hdr=0x%02X)\n", (int)data.size(), header);
     }
 
+    // Wire debug: decode Reticulum packet header for interop analysis
+    if (_wireDebug && data.size() >= 2) {
+        dumpPacketHeader("TX", data.data(), data.size());
+    }
+
     _txPending = true;
     _txStartMs = millis();
     _txData = data;
@@ -125,16 +130,33 @@ void LoRaInterface::loop() {
     // Handle async TX completion
     if (_txPending) {
         if (millis() - _txStartMs > TX_TIMEOUT_MS) {
-            Serial.println("[LORA_IF] TX TIMEOUT — radio stuck, forcing recovery");
+            _consecutiveTxTimeouts++;
+            Serial.printf("[LORA_IF] TX TIMEOUT #%d — radio stuck, forcing recovery\n",
+                          _consecutiveTxTimeouts);
             _txPending = false;
             _splitTxPending = false;
             _splitTxRemaining = RNS::Bytes();
             _txData = RNS::Bytes();
+
+            // Auto-reinit after consecutive failures
+            if (_consecutiveTxTimeouts >= REINIT_THRESHOLD) {
+                Serial.printf("[LORA_IF] WATCHDOG: %d consecutive TX timeouts — reinitializing radio\n",
+                              _consecutiveTxTimeouts);
+                _totalReinits++;
+                if (_radio->reinit()) {
+                    _consecutiveTxTimeouts = 0;
+                    Serial.println("[LORA_IF] WATCHDOG: radio reinitialized OK");
+                } else {
+                    Serial.println("[LORA_IF] WATCHDOG: reinit FAILED — radio may be dead");
+                    _online = false;
+                }
+            }
             _radio->receive();
             return;
         }
         if (!_radio->isTxBusy()) {
             _txPending = false;
+            _consecutiveTxTimeouts = 0;  // Successful TX — reset watchdog
 
             // If split TX pending, send the second frame immediately
             if (_splitTxPending) {
@@ -207,6 +229,7 @@ void LoRaInterface::loop() {
     // Capture signal quality before any further processing
     _lastRxRssi = _radio->packetRssi();
     _lastRxSnr = _radio->packetSnr();
+    _lastRxTime = millis();
 
     uint8_t header = raw[0];
     int payloadSize = packetSize - RNODE_HEADER_L;
@@ -233,6 +256,11 @@ void LoRaInterface::loop() {
             _splitRxPending = false;
 
             Serial.printf("[LORA_IF] RX SPLIT reassembled: %d bytes total\n", totalSize);
+
+            // Wire debug: decode reassembled Reticulum packet
+            if (_wireDebug && _splitRxBuffer.size() >= 2) {
+                dumpPacketHeader("RX", _splitRxBuffer.data(), _splitRxBuffer.size(), _lastRxRssi, _lastRxSnr);
+            }
 
             InterfaceImpl::handle_incoming(_splitRxBuffer);
             _splitRxBuffer = RNS::Bytes();
@@ -263,6 +291,12 @@ void LoRaInterface::loop() {
 
     RNS::Bytes buf(payloadSize);
     memcpy(buf.writable(payloadSize), raw + RNODE_HEADER_L, payloadSize);
+
+    // Wire debug: decode Reticulum packet header for interop analysis
+    if (_wireDebug && payloadSize >= 2) {
+        dumpPacketHeader("RX", raw + RNODE_HEADER_L, payloadSize, _lastRxRssi, _lastRxSnr);
+    }
+
     InterfaceImpl::handle_incoming(buf);
 
     // Always re-arm RX — if TX is pending, transmitNow() will override
@@ -275,4 +309,54 @@ float LoRaInterface::airtimeUtilization() const {
     if (elapsed == 0) elapsed = 1;
     float windowMs = std::min((float)elapsed, (float)AIRTIME_WINDOW_MS);
     return _airtimeAccumMs / windowMs;
+}
+
+void LoRaInterface::dumpPacketHeader(const char* direction, const uint8_t* data, size_t len, int rssi, float snr) {
+    if (len < 2) return;
+
+    // Decode Reticulum header (first 2 bytes after RNode framing is stripped)
+    uint8_t flags = data[0];
+    uint8_t hops = data[1];
+    int headerType   = (flags >> 6) & 0x01;
+    int ifacFlag     = (flags >> 7) & 0x01;
+    int contextFlag  = (flags >> 5) & 0x01;
+    int transportType = (flags >> 4) & 0x01;
+    int destType     = (flags >> 2) & 0x03;
+    int pktType      = flags & 0x03;
+
+    const char* pktTypeStr[] = {"DATA", "ANNOUNCE", "LINKREQ", "PROOF"};
+    const char* destTypeStr[] = {"SINGLE", "GROUP", "PLAIN", "LINK"};
+    const char* hdrTypeStr[] = {"H1(16B)", "H2(32B)"};
+
+    Serial.printf("[WIRE-%s] %d bytes flags=0x%02X %s %s %s %s ifac=%d ctx=%d hops=%d",
+        direction, (int)len, flags,
+        pktTypeStr[pktType & 0x03], destTypeStr[destType & 0x03],
+        hdrTypeStr[headerType & 0x01],
+        transportType ? "TRANSPORT" : "BROADCAST",
+        ifacFlag, contextFlag, hops);
+
+    if (rssi != 0 || snr != 0) {
+        Serial.printf(" rssi=%d snr=%.1f", rssi, snr);
+    }
+
+    // Show destination hash (starts at byte 2)
+    if (len >= 18) {
+        Serial.printf(" dest=");
+        for (int i = 2; i < 18 && i < (int)len; i++) Serial.printf("%02x", data[i]);
+    }
+
+    // For HEADER_2, also show transport_id
+    if (headerType == 1 && len >= 34) {
+        Serial.printf(" via=");
+        for (int i = 18; i < 34; i++) Serial.printf("%02x", data[i]);
+    }
+
+    Serial.println();
+
+    // Hex dump of first 48 bytes
+    int dumpLen = (len < 48) ? len : 48;
+    Serial.printf("[WIRE-%s] hex: ", direction);
+    for (int i = 0; i < dumpLen; i++) Serial.printf("%02x", data[i]);
+    if ((int)len > dumpLen) Serial.printf("... (+%d)", (int)len - dumpLen);
+    Serial.println();
 }

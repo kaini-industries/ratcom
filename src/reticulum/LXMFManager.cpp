@@ -37,8 +37,8 @@ void LXMFManager::loop() {
             _store->saveMessage(msg);
         }
 
-        // Track unread
-        std::string peerHex = msg.sourceHash.toHex();
+        // Track unread (normalize to 16-char hex — matches conversation dir names)
+        std::string peerHex = msg.sourceHash.toHex().substr(0, 16);
         _unread[peerHex]++;
 
         // Notify UI
@@ -47,19 +47,60 @@ void LXMFManager::loop() {
         }
     }
 
+    // Periodic path refresh for peers with queued messages (every 60s)
+    {
+        static unsigned long lastPathRefresh = 0;
+        unsigned long now = millis();
+        if (now - lastPathRefresh >= 60000) {
+            lastPathRefresh = now;
+            for (const auto& msg : _outQueue) {
+                if (!RNS::Transport::has_path(msg.destHash)) {
+                    RNS::Transport::request_path(msg.destHash);
+                }
+            }
+        }
+    }
+
+    // Proactive stale link cleanup (every 10s)
+    {
+        static unsigned long lastLinkCheck = 0;
+        if (millis() - lastLinkCheck >= 10000) {
+            lastLinkCheck = millis();
+            if (_outLink && _outLink.status() == RNS::Type::Link::CLOSED) {
+                Serial.println("[LXMF] Cleaning stale outbound link (CLOSED)");
+                _outLink = {RNS::Type::NONE};
+                _outLinkPending = false;
+            }
+        }
+    }
+
     if (_outQueue.empty()) return;
     unsigned long now = millis();
     int processed = 0;
 
-    for (auto it = _outQueue.begin(); it != _outQueue.end(); ) {
-        // Time-budgeted: process up to 3 messages within 10ms
-        if (processed >= 3 || (processed > 0 && millis() - now >= 10)) break;
+    // Priority: process new messages (retries=0) before old retries.
+    // Find the best candidate: lowest retry count that's past cooldown.
+    // Exponential backoff: 2s, 4s, 8s, 16s, 30s cap — accounts for LoRa RTT.
+    auto findBest = [&]() -> std::deque<LXMFMessage>::iterator {
+        auto best = _outQueue.end();
+        for (auto it = _outQueue.begin(); it != _outQueue.end(); ++it) {
+            if (it->retries > 0) {
+                int shift = std::min(it->retries, 4);  // cap at 2^4 = 16x
+                unsigned long cooldown = std::min(30000UL, 2000UL * (1UL << shift));
+                if ((millis() - it->lastRetryMs) < cooldown) continue;
+            }
+            if (best == _outQueue.end() || it->retries < best->retries) {
+                best = it;
+            }
+        }
+        return best;
+    };
+
+    while (processed < 3 && (processed == 0 || millis() - now < 10)) {
+        auto it = findBest();
+        if (it == _outQueue.end()) break;
 
         LXMFMessage& msg = *it;
-
-        // Per-message retry cooldown: 2 seconds between attempts
-        if (msg.retries > 0 && (millis() - msg.lastRetryMs) < 2000) { ++it; continue; }
-
         msg.lastRetryMs = millis();
 
         if (sendDirect(msg)) {
@@ -70,9 +111,9 @@ void LXMFManager::loop() {
                 std::string peerHex = msg.destHash.toHex();
                 _statusCb(peerHex, msg.timestamp, msg.status);
             }
-            it = _outQueue.erase(it);
+            _outQueue.erase(it);
         } else {
-            ++it;
+            break;  // cooldown was just set — findBest will skip this one next time
         }
     }
 }
@@ -203,6 +244,8 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
     msg.status = LXMFStatus::SENDING;
     bool sent = false;
 
+    std::string peerHex = msg.destHash.toHex();
+
     // Try link-based delivery if we have an active link to this peer
     if (_outLink && _outLinkDestHash == msg.destHash
         && _outLink.status() == RNS::Type::Link::ACTIVE) {
@@ -218,7 +261,10 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
                           (int)linkBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
             RNS::Packet packet(_outLink, linkBytes);
             RNS::PacketReceipt receipt = packet.send();
-            if (receipt) { sent = true; }
+            if (receipt) {
+                sent = true;
+                trackReceipt(receipt, peerHex, msg.timestamp);
+            }
         } else {
             // Too large for single packet — use Resource transfer
             Serial.printf("[LXMF] sending via link resource: %d bytes to %s\n",
@@ -240,7 +286,10 @@ bool LXMFManager::sendDirect(LXMFMessage& msg) {
                           (int)payloadBytes.size(), msg.destHash.toHex().substr(0, 8).c_str());
             RNS::Packet packet(outDest, payloadBytes);
             RNS::PacketReceipt receipt = packet.send();
-            if (receipt) { sent = true; }
+            if (receipt) {
+                sent = true;
+                trackReceipt(receipt, peerHex, msg.timestamp);
+            }
         } else {
             // Too large for opportunistic — need link + resource transfer
             Serial.printf("[LXMF] Message too large for opportunistic (%d bytes > MDU), needs link (retry %d)\n",
@@ -389,7 +438,9 @@ int LXMFManager::unreadCount(const std::string& peerHex) const {
         for (auto& kv : _unread) total += kv.second;
         return total;
     }
-    auto it = _unread.find(peerHex);
+    // Normalize to 16-char hex — matches conversation dir names
+    std::string key = peerHex.substr(0, 16);
+    auto it = _unread.find(key);
     return (it != _unread.end()) ? it->second : 0;
 }
 
@@ -411,16 +462,88 @@ void LXMFManager::computeUnreadFromDisk() {
 }
 
 void LXMFManager::markRead(const std::string& peerHex) {
-    _unread[peerHex] = 0;
+    // Normalize to 16-char hex — matches conversation dir names
+    std::string key = peerHex.substr(0, 16);
+    _unread[key] = 0;
     if (_store) {
-        _store->markConversationRead(peerHex);
+        _store->markConversationRead(key);
     }
 }
 
 void LXMFManager::deleteConversation(const std::string& peerHex) {
+    // Normalize to 16-char hex — matches conversation dir names
+    std::string key = peerHex.substr(0, 16);
     if (_store) {
-        _store->deleteConversation(peerHex);
+        _store->deleteConversation(key);
     }
-    _unread.erase(peerHex);
-    Serial.printf("[LXMF] Conversation deleted: %s\n", peerHex.substr(0, 8).c_str());
+    _unread.erase(key);
+    Serial.printf("[LXMF] Conversation deleted: %s\n", key.substr(0, 8).c_str());
+}
+
+void LXMFManager::refreshPathForPeer(const std::string& peerHex) {
+    if (peerHex.empty()) return;
+    RNS::Bytes destHash;
+    destHash.assignHex(peerHex.c_str());
+    if (!RNS::Transport::has_path(destHash)) {
+        RNS::Transport::request_path(destHash);
+        Serial.printf("[LXMF] Path refresh requested for active peer %s\n",
+                      peerHex.substr(0, 8).c_str());
+    }
+}
+
+// =============================================================================
+// Receipt tracking — delivery proof and timeout callbacks
+// =============================================================================
+
+void LXMFManager::trackReceipt(RNS::PacketReceipt receipt, const std::string& peerHex, double timestamp) {
+    if (!receipt) return;
+
+    // Register callbacks
+    receipt.set_delivery_callback(onDeliveryProof);
+    receipt.set_timeout_callback(onDeliveryTimeout);
+
+    // Store mapping from receipt hash to message info
+    std::string hashHex = receipt.hash().toHex();
+    _pendingReceipts[hashHex] = {peerHex, timestamp};
+
+    // Cap the map to prevent unbounded growth
+    while ((int)_pendingReceipts.size() > MAX_PENDING_RECEIPTS) {
+        _pendingReceipts.erase(_pendingReceipts.begin());
+    }
+
+    Serial.printf("[LXMF] Tracking receipt %s for %s\n",
+                  hashHex.substr(0, 8).c_str(), peerHex.substr(0, 8).c_str());
+}
+
+void LXMFManager::onDeliveryProof(const RNS::PacketReceipt& receipt) {
+    if (!_instance) return;
+
+    std::string hashHex = receipt.hash().toHex();
+    auto it = _instance->_pendingReceipts.find(hashHex);
+    if (it != _instance->_pendingReceipts.end()) {
+        Serial.printf("[LXMF] DELIVERED: proof received for %s\n",
+                      it->second.peerHex.substr(0, 8).c_str());
+
+        if (_instance->_statusCb) {
+            _instance->_statusCb(it->second.peerHex, it->second.timestamp, LXMFStatus::DELIVERED);
+        }
+
+        _instance->_pendingReceipts.erase(it);
+    } else {
+        Serial.printf("[LXMF] Delivery proof for unknown receipt %s\n", hashHex.substr(0, 8).c_str());
+    }
+}
+
+void LXMFManager::onDeliveryTimeout(const RNS::PacketReceipt& receipt) {
+    if (!_instance) return;
+
+    std::string hashHex = receipt.hash().toHex();
+    auto it = _instance->_pendingReceipts.find(hashHex);
+    if (it != _instance->_pendingReceipts.end()) {
+        Serial.printf("[LXMF] Delivery timeout for %s\n",
+                      it->second.peerHex.substr(0, 8).c_str());
+        // Don't mark as FAILED — the packet was sent, just not proven.
+        // Leave as SENT so user knows it went out.
+        _instance->_pendingReceipts.erase(it);
+    }
 }

@@ -395,8 +395,10 @@ bool MessageStore::saveMessage(const LXMFMessage& msg) {
         return false;
     }
 
-    std::string peerHex = msg.incoming ?
+    std::string peerHexFull = msg.incoming ?
         msg.sourceHash.toHex() : msg.destHash.toHex();
+    // Normalize to 16-char truncated hex — matches filesystem directory names
+    std::string peerHex = peerHexFull.substr(0, 16);
 
     // Assign receive counter (NO NVS write — batched by WriteQueue task)
     uint32_t counter = _nextReceiveCounter++;
@@ -609,7 +611,9 @@ int MessageStore::messageCount(const std::string& peerHex) const {
     return count;
 }
 
-bool MessageStore::deleteConversation(const std::string& peerHex) {
+bool MessageStore::deleteConversation(const std::string& peerHexRaw) {
+    // Normalize to 16-char truncated hex — matches filesystem directory names
+    std::string peerHex = peerHexRaw.substr(0, 16);
     // Count before deleting so we can update global total
     int deleted = messageCount(peerHex);
 

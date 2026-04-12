@@ -19,6 +19,7 @@ public:
     void setLXMFManager(LXMFManager* lxmf) { _lxmf = lxmf; }
     void setAnnounceManager(AnnounceManager* am) { _am = am; }
     void setPeerHex(const std::string& peerHex) { _peerHex = peerHex; }
+    const std::string& peerHex() const { return _peerHex; }
     void notifyNewMessage() { _needsRefresh = true; }
     void notifyNewMessage(const LXMFMessage& msg);
 

@@ -211,8 +211,19 @@ void onHotkeyAnnounce() {
 void onHotkeyDiag() {
     Serial.println("=== DIAGNOSTIC DUMP ===");
     Serial.printf("Identity: %s\n", rns.identityHash().c_str());
+    Serial.printf("Dest:     %s\n", rns.destination().hash().toHex().c_str());
     Serial.printf("Node: %s (endpoint, no forwarding)\n", rns.isTransportActive() ? "ONLINE" : "OFFLINE");
     Serial.printf("Paths: %d  Links: %d\n", (int)rns.pathCount(), (int)rns.linkCount());
+    Serial.printf("Proof strategy: PROVE_ALL=%d\n",
+        (int)(rns.destination().proof_strategy() == RNS::Type::Destination::PROVE_ALL));
+
+    // Time diagnostics — critical for interop
+    time_t sysTime = time(nullptr);
+    double osTime = RNS::Utilities::OS::time();
+    Serial.printf("OS::time(): %.1f  time(nullptr): %ld  epoch=%s\n",
+        osTime, (long)sysTime,
+        sysTime > 1700000000 ? "YES" : "NO (uptime only — interop risk!)");
+
     Serial.printf("Radio: %s\n", radioOnline ? "ONLINE" : "OFFLINE");
     if (radioOnline) {
         Serial.printf("Freq: %lu Hz  SF: %d  BW: %lu  CR: 4/%d  TXP: %d dBm\n",
@@ -242,13 +253,46 @@ void onHotkeyDiag() {
         Serial.printf("  0x0902 (TX clamp):    0x%02X\n", radio.readRegister(0x0902));
         Serial.println("----------------------------");
     }
+
+    // Path table dump
+    Serial.println("--- Path Table ---");
+    auto& pathTable = rns.reticulum().get_path_table();
+    int pathIdx = 0;
+    for (auto& [hash, entry] : pathTable) {
+        bool canRecall = (bool)RNS::Identity::recall(hash);
+        Serial.printf("  [%d] %s hops=%d recall=%s\n",
+            pathIdx++, hash.toHex().substr(0, 16).c_str(),
+            entry._hops, canRecall ? "YES" : "NO");
+        if (pathIdx >= 20) { Serial.println("  ... (truncated)"); break; }
+    }
+    if (pathIdx == 0) Serial.println("  (empty)");
+
+    // LXMF queue status
+    Serial.printf("--- LXMF Queue: %d messages ---\n", lxmf.queuedCount());
+
+    // Saved contacts — identity recall test
+    if (announceManager) {
+        Serial.println("--- Contact Recall Test ---");
+        auto& nodes = announceManager->nodes();
+        int contactIdx = 0;
+        for (const auto& node : nodes) {
+            if (!node.saved) continue;
+            bool hasPath = RNS::Transport::has_path(node.hash);
+            bool canRecall = (bool)RNS::Identity::recall(node.hash);
+            int hops = hasPath ? RNS::Transport::hops_to(node.hash) : -1;
+            Serial.printf("  %s %-16s path=%s(%dhop) recall=%s\n",
+                node.hash.toHex().substr(0, 8).c_str(),
+                node.name.substr(0, 16).c_str(),
+                hasPath ? "YES" : "NO", hops,
+                canRecall ? "YES" : "NO");
+            if (++contactIdx >= 15) break;
+        }
+        if (contactIdx == 0) Serial.println("  (no saved contacts)");
+    }
+
     Serial.printf("Free heap: %lu bytes\n", (unsigned long)ESP.getFreeHeap());
-    Serial.printf("Flash: used/total (see heartbeat for heap)\n");
     Serial.printf("WriteQ pending: %d\n", messageStore.writeQueue().drainCount());
     Serial.printf("Uptime: %lu s\n", millis() / 1000);
-    time_t diagNow = time(nullptr);
-    Serial.printf("System time: %ld (%s)\n", (long)diagNow,
-        diagNow > 1700000000 ? "epoch OK" : "NO EPOCH — announce interop risk");
     Serial.println("=======================");
 }
 
@@ -298,6 +342,17 @@ void onHotkeyRadioTest() {
     Serial.println();
 
     radio.receive();
+}
+
+void onHotkeyWireDebug() {
+    LoRaInterface* lora = rns.loraInterface();
+    if (lora) {
+        bool newState = !lora->wireDebug();
+        lora->setWireDebug(newState);
+        Serial.printf("[WIRE] Packet header debug %s\n", newState ? "ENABLED" : "DISABLED");
+    } else {
+        Serial.println("[WIRE] No LoRa interface");
+    }
 }
 
 void onHotkeyCADTest() {
@@ -398,6 +453,7 @@ void setup() {
     hotkeys.registerHotkey('d', "Diagnostics", onHotkeyDiag);
     hotkeys.registerHotkey('t', "Radio Test", onHotkeyRadioTest);
     hotkeys.registerHotkey('r', "RSSI Monitor", onHotkeyRssiMonitor);
+    hotkeys.registerHotkey('w', "Wire Debug", onHotkeyWireDebug);
     hotkeys.registerHotkey('c', "CAD Test", onHotkeyCADTest);
     hotkeys.setTabCycleCallback([](int dir) {
         ui.tabBar().cycleTab(dir);
@@ -885,6 +941,18 @@ void loop() {
         }
     }
 
+    // 3b. Active conversation path refresh (every 30s)
+    {
+        static unsigned long lastConvPathRefresh = 0;
+        if (now - lastConvPathRefresh >= 30000) {
+            lastConvPathRefresh = now;
+            const std::string& activePeer = messageView.peerHex();
+            if (!activePeer.empty()) {
+                lxmf.refreshPathForPeer(activePeer);
+            }
+        }
+    }
+
     // 4. Auto-announce (2 minutes)
     if (bootComplete && now - lastAutoAnnounce >= ANNOUNCE_INTERVAL_MS) {
         lastAutoAnnounce = now;
@@ -990,6 +1058,10 @@ void loop() {
                     if (tcp->isConnected()) { anyTcpConnected = true; break; }
                 }
                 ui.statusBar().setTCPConnected(anyTcpConnected);
+                // Update radio health indicator
+                if (rns.loraInterface()) {
+                    ui.statusBar().setLoRaHealthy(rns.loraInterface()->radioHealthy());
+                }
 #if HAS_GPS
                 ui.statusBar().setGPSTimeFix(gps.hasTimeFix());
 #endif
@@ -1006,7 +1078,8 @@ void loop() {
 
         if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
             lastHeartbeat = now;
-            Serial.printf("[HEART] heap=%lu min=%lu stack=%lu loop=%lums nodes=%d paths=%d links=%d lxmfQ=%d writeQ=%d up=%lus\n",
+            LoRaInterface* lora = rns.loraInterface();
+            Serial.printf("[HEART] heap=%lu min=%lu stack=%lu loop=%lums nodes=%d paths=%d links=%d lxmfQ=%d writeQ=%d up=%lus",
                           (unsigned long)ESP.getFreeHeap(),
                           (unsigned long)ESP.getMinFreeHeap(),
                           (unsigned long)uxTaskGetStackHighWaterMark(NULL),
@@ -1017,6 +1090,16 @@ void loop() {
                           lxmf.queuedCount(),
                           messageStore.writeQueue().drainCount(),
                           millis() / 1000);
+            if (lora) {
+                unsigned long rxAge = lora->lastRxTime() > 0 ? (millis() - lora->lastRxTime()) / 1000 : 0;
+                Serial.printf(" radio=%s txFail=%d reinit=%d rxAge=%lus air=%.1f%%",
+                              lora->radioHealthy() ? "OK" : "SICK",
+                              lora->consecutiveTxTimeouts(),
+                              lora->totalReinits(),
+                              rxAge,
+                              lora->airtimeUtilization() * 100.0f);
+            }
+            Serial.println();
             maxLoopTime = 0;
         }
     }

@@ -28,20 +28,25 @@ static std::string truncUTF8(const std::string& name, size_t maxChars) {
     return name.substr(0, i);
 }
 
-// Helper: format a node line
+// Helper: format a node line — includes abbreviated hash to distinguish same-name peers
 static void formatNodeLine(char* line, size_t lineSize, const DiscoveredNode& node) {
-    std::string displayName = truncUTF8(node.name, 18);
+    // Abbreviate hash: last 4 hex chars
+    std::string hashHex = node.hash.toHex();
+    std::string hashSuffix = hashHex.size() >= 4 ? hashHex.substr(hashHex.size() - 4) : hashHex;
+
+    // Truncate name shorter to make room for hash + time + hops
+    std::string displayName = truncUTF8(node.name, 14);
     unsigned long ago = (millis() - node.lastSeen) / 1000;
     if (ago < 60) {
         if (node.hops < 128)
-            snprintf(line, lineSize, "%-20s %3lus %dhop", displayName.c_str(), ago, node.hops);
+            snprintf(line, lineSize, "%-15s%s %3lus %dhop", displayName.c_str(), hashSuffix.c_str(), ago, node.hops);
         else
-            snprintf(line, lineSize, "%-20s %3lus", displayName.c_str(), ago);
+            snprintf(line, lineSize, "%-15s%s %3lus", displayName.c_str(), hashSuffix.c_str(), ago);
     } else {
         if (node.hops < 128)
-            snprintf(line, lineSize, "%-20s %3lum %dhop", displayName.c_str(), ago / 60, node.hops);
+            snprintf(line, lineSize, "%-15s%s %3lum %dhop", displayName.c_str(), hashSuffix.c_str(), ago / 60, node.hops);
         else
-            snprintf(line, lineSize, "%-20s %3lum", displayName.c_str(), ago / 60);
+            snprintf(line, lineSize, "%-15s%s %3lum", displayName.c_str(), hashSuffix.c_str(), ago / 60);
     }
 }
 

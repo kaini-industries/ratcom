@@ -90,13 +90,18 @@ void HomeScreen::render(M5Canvas& canvas) {
     y += lineH;
 
     if (_radio && _radio->isRadioOnline()) {
-        canvas.setTextColor(Theme::MUTED);
         canvas.setCursor(pad + 2, y);
-        canvas.printf("%.1f MHz  TX:%d dBm  CR:%d  P:%d L:%d",
+        LoRaInterface* lora = _rns ? _rns->loraInterface() : nullptr;
+        float airPct = lora ? lora->airtimeUtilization() * 100.0f : 0;
+        uint16_t airColor = airPct > 20.0f ? Theme::WARNING : Theme::MUTED;
+        canvas.setTextColor(Theme::MUTED);
+        canvas.printf("%.1fMHz TX%d CR%d P:%d L:%d ",
             _radio->getFrequency() / 1000000.0,
             _radio->getTxPower(), _radio->getCodingRate4(),
             _rns ? (int)_rns->pathCount() : 0,
             _rns ? (int)_rns->linkCount() : 0);
+        canvas.setTextColor(airColor);
+        canvas.printf("%.0f%%", airPct);
     }
     y += lineH + 4;
 
